@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag to publish
+        required: false
+        type: string
   push:
     tags:
       - "v*"
@@ -19,6 +25,7 @@ jobs:
       NOTARY_PASSWORD: ${{ secrets.STICKMAN_NOTARY_PASSWORD }}
       NOTARY_TEAM_ID: ${{ secrets.STICKMAN_NOTARY_TEAM_ID }}
       SIGN_IDENTITY: ${{ secrets.STICKMAN_SIGN_IDENTITY }}
+      RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode
@@ -51,4 +58,4 @@ jobs:
         run: |
           RELEASE_FLAGS=()
           if [[ -z "$SIGN_IDENTITY" ]]; then RELEASE_FLAGS+=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" dist/Stickman-*-macos-universal.zip dist/Stickman-*-macos-universal.zip.sha256 --generate-notes --title "Stickman $GITHUB_REF_NAME" "${RELEASE_FLAGS[@]}"
+          gh release create "$RELEASE_TAG" dist/Stickman-*-macos-universal.zip dist/Stickman-*-macos-universal.zip.sha256 --generate-notes --title "Stickman $RELEASE_TAG" "${RELEASE_FLAGS[@]}"
