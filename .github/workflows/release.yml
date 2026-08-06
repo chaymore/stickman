@@ -58,4 +58,8 @@ jobs:
         run: |
           RELEASE_FLAGS=()
           if [[ -z "$SIGN_IDENTITY" ]]; then RELEASE_FLAGS+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" dist/Stickman-*-macos-universal.zip dist/Stickman-*-macos-universal.zip.sha256 --generate-notes --title "Stickman $RELEASE_TAG" "${RELEASE_FLAGS[@]}"
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" dist/Stickman-*-macos-universal.zip dist/Stickman-*-macos-universal.zip.sha256 --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/Stickman-*-macos-universal.zip dist/Stickman-*-macos-universal.zip.sha256 --generate-notes --title "Stickman $RELEASE_TAG" "${RELEASE_FLAGS[@]}"
+          fi
