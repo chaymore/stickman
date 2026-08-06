@@ -18,5 +18,6 @@ let package = Package(
             name: "StickmanTests",
             dependencies: ["Stickman"],
             path: "Tests/StickmanTests"),
-    ]
+    ],
+    swiftLanguageVersions: [.v5]
 )

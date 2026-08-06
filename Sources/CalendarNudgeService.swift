@@ -17,11 +17,11 @@ final class CalendarNudgeService {
             forName: .stickmanPermissionsDidChange,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+        ) { _ in
+            Task { @MainActor in await CalendarNudgeService.shared.refresh() }
         }
-        let timer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+        let timer = Timer.scheduledTimer(withTimeInterval: 30 * 60, repeats: true) { _ in
+            Task { @MainActor in await CalendarNudgeService.shared.refresh() }
         }
         RunLoop.main.add(timer, forMode: .common)
         refreshTimer = timer

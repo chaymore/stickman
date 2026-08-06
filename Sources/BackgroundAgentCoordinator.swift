@@ -128,8 +128,8 @@ final class BackgroundAgentCoordinator {
 
     func start() {
         guard pollTimer == nil else { return }
-        let timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
-            Task { @MainActor in await self?.pollActiveTasks() }
+        let timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+            Task { @MainActor in await BackgroundAgentCoordinator.shared.pollActiveTasks() }
         }
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer

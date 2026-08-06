@@ -31,6 +31,7 @@ for ARCH in ${(z)ARCH_LIST}; do
     xcrun --sdk macosx swiftc \
       -O \
       -whole-module-optimization \
+      -swift-version 5 \
       -target "$ARCH-apple-macos$MINIMUM_MACOS_VERSION" \
       -sdk "$SDK_PATH" \
       -module-cache-path "$ARCH_BUILD_DIR/module-cache" \

@@ -10,6 +10,7 @@ OUTPUT_BIN="$BUILD_DIR/Stickman"
 mkdir -p "$MODULE_CACHE_DIR"
 
 swiftc \
+  -swift-version 5 \
   -module-cache-path "$MODULE_CACHE_DIR" \
   -framework AppKit \
   -framework ApplicationServices \

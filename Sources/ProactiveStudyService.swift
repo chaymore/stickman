@@ -29,14 +29,14 @@ final class ProactiveStudyService {
 
     func start() {
         guard timer == nil else { return }
-        let timer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkNow() }
+        let timer = Timer.scheduledTimer(withTimeInterval: 5 * 60, repeats: true) { _ in
+            Task { @MainActor in ProactiveStudyService.shared.checkNow() }
         }
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
         for name in [Notification.Name.stickmanPermissionsDidChange, .stickmanConnectorsDidChange] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.checkNow() }
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                Task { @MainActor in ProactiveStudyService.shared.checkNow() }
             })
         }
         checkNow()
