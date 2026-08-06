@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest a focused improvement to Stickman
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: What user need should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Permission and privacy impact
+      description: Note any new screen, account, browser, calendar, microphone, or Accessibility access.

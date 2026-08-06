@@ -1,0 +1,187 @@
+#!/bin/zsh
+
+set -euo pipefail
+
+KEYCHAIN_SERVICE="Stickman OpenAI API Key"
+OPENROUTER_KEYCHAIN_SERVICE="Stickman OpenRouter API Key"
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -L "$0" ]]; then
+  TARGET="$(readlink "$0")"
+  ROOT_DIR="$(cd "$(dirname "$TARGET")" && pwd)"
+fi
+
+read_keychain_value() {
+  local primary_service="$1"
+  local legacy_service="$2"
+  local value
+  value="$(security find-generic-password -a "$USER" -s "$primary_service" -w 2>/dev/null || true)"
+  if [[ -z "$value" ]]; then
+    value="$(security find-generic-password -a "$USER" -s "$legacy_service" -w 2>/dev/null || true)"
+  fi
+  print -r -- "$value"
+}
+
+load_keychain_api_key() {
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then
+    return
+  fi
+
+  local key
+  key="$(read_keychain_value "$KEYCHAIN_SERVICE" "Milo OpenAI API Key")"
+  if [[ -n "$key" ]]; then
+    export OPENAI_API_KEY="$key"
+  fi
+}
+
+load_keychain_openrouter_key() {
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then
+    return
+  fi
+  local key
+  key="$(read_keychain_value "$OPENROUTER_KEYCHAIN_SERVICE" "Milo OpenRouter API Key")"
+  if [[ -n "$key" ]]; then
+    export OPENROUTER_API_KEY="$key"
+  fi
+}
+
+if [[ "${1:-}" == "--set-api-key" ]]; then
+  echo -n "Paste your OpenAI API key: "
+  stty -echo
+  read -r api_key
+  stty echo
+  echo
+
+  if [[ -z "$api_key" ]]; then
+    echo "No API key entered."
+    exit 1
+  fi
+
+  security add-generic-password \
+    -a "$USER" \
+    -s "$KEYCHAIN_SERVICE" \
+    -w "$api_key" \
+    -U >/dev/null
+
+  echo "Saved OpenAI API key to macOS Keychain for Stickman."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--set-openrouter-key" ]]; then
+  echo -n "Paste your OpenRouter API key: "
+  stty -echo
+  read -r api_key
+  stty echo
+  echo
+  if [[ -z "$api_key" ]]; then
+    echo "No API key entered."
+    exit 1
+  fi
+  security add-generic-password -a "$USER" -s "$OPENROUTER_KEYCHAIN_SERVICE" -w "$api_key" -U >/dev/null
+  echo "Saved OpenRouter API key to macOS Keychain for Stickman."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--build-app" ]]; then
+  exec "$ROOT_DIR/scripts/build-app.sh"
+fi
+
+if [[ "${1:-}" == "--package" ]]; then
+  exec "$ROOT_DIR/scripts/package-release.sh"
+fi
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  cat <<'HELP'
+Stickman developer launcher
+
+  ./stickman                         Build and run from source
+  ./stickman --set-api-key           Store an OpenAI key in macOS Keychain
+  ./stickman --set-openrouter-key    Store an optional OpenRouter key
+  ./stickman --check-api             Verify the selected OpenAI model
+  ./stickman --build-app             Build a universal app bundle
+  ./stickman --install-app           Build and install /Applications/Stickman.app
+  ./stickman --open-app              Open the installed app
+  ./stickman --package               Create a release zip and checksum
+HELP
+  exit 0
+fi
+
+if [[ "${1:-}" == "--render-avatar-preview" ]]; then
+  output_path="${2:-DesignConcepts/StickmanPreview/avatar-states.png}"
+  exec "$ROOT_DIR/run.sh" --render-avatar-preview "$output_path"
+fi
+
+if [[ "${1:-}" == "--render-avatar-animation-preview" ]]; then
+  output_path="${2:-DesignConcepts/StickmanPreview/avatar-states.gif}"
+  exec "$ROOT_DIR/run.sh" --render-avatar-animation-preview "$output_path"
+fi
+
+if [[ "${1:-}" == "--render-window-preview" ]]; then
+  output_path="${2:-DesignConcepts/StickmanPreview/window-preview.png}"
+  exec "$ROOT_DIR/run.sh" --render-window-preview "$output_path"
+fi
+
+if [[ "${1:-}" == "--check-preview-artifacts" ]]; then
+  export STICKMAN_PROJECT_DIR="$ROOT_DIR"
+  exec "$ROOT_DIR/run.sh" --check-preview-artifacts
+fi
+
+if [[ "${1:-}" == "--render-reference-comparison" ]]; then
+  output_path="${2:-DesignConcepts/StickmanPreview/reference-comparison.png}"
+  export STICKMAN_PROJECT_DIR="$ROOT_DIR"
+  exec "$ROOT_DIR/run.sh" --render-reference-comparison "$output_path"
+fi
+
+if [[ "${1:-}" == "--install-app" ]]; then
+  "$ROOT_DIR/scripts/build-app.sh"
+  ditto "$ROOT_DIR/dist/Stickman.app" "/Applications/Stickman.app"
+  echo "Installed Stickman.app to /Applications/Stickman.app"
+  echo "Open it with: open \"/Applications/Stickman.app\""
+  exit 0
+fi
+
+if [[ "${1:-}" == "--open-app" ]]; then
+  if [[ ! -d "/Applications/Stickman.app" ]]; then
+    "$0" --install-app
+  fi
+
+  open "/Applications/Stickman.app"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--check-api" ]]; then
+  load_keychain_api_key
+
+  if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+    echo "No API key found. Run: stickman --set-api-key"
+    exit 1
+  fi
+
+  MODEL="${STICKMAN_OPENAI_MODEL:-gpt-5.6-terra}"
+  BODY="$(printf '{"model":"%s","input":"Reply with exactly: ok","reasoning":{"effort":"none","context":"current_turn"},"store":false,"max_output_tokens":20}' "$MODEL")"
+  RESPONSE_FILE="$(mktemp)"
+  STATUS="$(
+    curl -sS \
+      https://api.openai.com/v1/responses \
+      -H "Authorization: Bearer $OPENAI_API_KEY" \
+      -H "Content-Type: application/json" \
+      -d "$BODY" \
+      -o "$RESPONSE_FILE" \
+      -w "%{http_code}"
+  )"
+
+  echo "Model: $MODEL"
+  echo "HTTP status: $STATUS"
+  cat "$RESPONSE_FILE"
+  rm -f "$RESPONSE_FILE"
+
+  if [[ "$STATUS" != 2* ]]; then
+    exit 1
+  fi
+
+  exit 0
+fi
+
+load_keychain_api_key
+load_keychain_openrouter_key
+export STICKMAN_PROJECT_DIR="$ROOT_DIR"
+exec "$ROOT_DIR/run.sh"

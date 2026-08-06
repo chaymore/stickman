@@ -1,0 +1,56 @@
+{
+  "body": {
+    "x": -55,
+    "y": 2,
+    "width": 110,
+    "height": 155
+  },
+  "face": {
+    "x": -48,
+    "y": 14,
+    "width": 96,
+    "height": 77
+  },
+  "eyes": {
+    "leftX": -25,
+    "rightX": 7,
+    "y": 23,
+    "width": 18,
+    "height": 23,
+    "pointerX": 0.35,
+    "pointerY": 0.25
+  },
+  "mouth": {
+    "widthRatio": 0.46,
+    "y": 37,
+    "height": 21
+  },
+  "leftArm": {
+    "x": -30,
+    "y": 76,
+    "width": 64,
+    "height": 59,
+    "rotation": -0.08
+  },
+  "rightArm": {
+    "x": -34,
+    "y": 76,
+    "width": 72,
+    "height": 78,
+    "rotation": 0.07
+  },
+  "leftFoot": {
+    "x": -38,
+    "y": -25,
+    "width": 35,
+    "height": 25,
+    "rotation": -0.08
+  },
+  "rightFoot": {
+    "x": 3,
+    "y": -26.25,
+    "width": 34,
+    "height": 25,
+    "rotation": 0.08
+  }
+}

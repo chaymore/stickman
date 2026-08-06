@@ -1,0 +1,38 @@
+#!/bin/zsh
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$ROOT_DIR/dist/NightLock.app"
+
+case "${1:-}" in
+  --build)
+    exec "$ROOT_DIR/scripts/build-app.sh"
+    ;;
+  --install)
+    "$ROOT_DIR/scripts/build-app.sh"
+    echo "NightLock.app is built at: $APP_DIR"
+    echo "Installation requires administrator approval."
+    /usr/bin/osascript -e "do shell script \"/usr/bin/ditto '$APP_DIR' '/Applications/NightLock.app' && '/Applications/NightLock.app/Contents/MacOS/NightLockInstaller'\" with administrator privileges"
+    open "/Applications/NightLock.app"
+    echo "Installed NightLock.app and its protected background services."
+    ;;
+  --open)
+    open "/Applications/NightLock.app"
+    ;;
+  --status)
+    if [[ -f "/Library/Application Support/NightLock/status.json" ]]; then
+      /bin/cat "/Library/Application Support/NightLock/status.json"
+    else
+      echo "NightLock is not installed or the daemon has not written status yet."
+      exit 1
+    fi
+    ;;
+  --recover)
+    echo "Recovery is deliberately protected and delayed."
+    exec /usr/bin/sudo "/Applications/NightLock.app/Contents/MacOS/nightlock-recover"
+    ;;
+  *)
+    echo "Usage: ./nightlock --build | --install | --open | --status | --recover"
+    ;;
+esac

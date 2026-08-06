@@ -1,0 +1,19 @@
+{
+  "controls": [
+    {
+      "sid": "bodyColor",
+      "label": "Body color"
+    },
+    {
+      "sid": "eyeColor",
+      "label": "Eye color"
+    },
+    {
+      "sid": "shadowOpacity",
+      "label": "Shadow",
+      "min": 0,
+      "max": 100,
+      "step": 1
+    }
+  ]
+}
