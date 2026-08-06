@@ -4,7 +4,7 @@ Thanks for helping make Stickman more useful and more alive.
 
 ## Setup
 
-1. Install Xcode Command Line Tools with `xcode-select --install`.
+1. Install Xcode 16 Command Line Tools or newer with `xcode-select --install`.
 2. Fork or clone the repository.
 3. Run `swift test`.
 4. Run `STICKMAN_ARCHS="$(uname -m)" ./scripts/build-app.sh` for a quick native build.

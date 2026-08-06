@@ -24,7 +24,7 @@ The app is native Swift and AppKit. Its black stick figure is procedurally drawn
 ## Requirements
 
 - macOS 12 or newer
-- Xcode Command Line Tools (`xcode-select --install`) when building from source
+- Xcode 16 Command Line Tools or newer (`xcode-select --install`) when building from source
 - An OpenAI API key for AI and voice features
 - Google Chrome only for Chrome-specific actions; the rest of Stickman works without it
 
