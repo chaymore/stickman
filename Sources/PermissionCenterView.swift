@@ -12,7 +12,7 @@ final class PermissionCenterView: NSView {
         wantsLayer = true
 
         introLabel.font = NSFont.systemFont(ofSize: 12)
-        introLabel.textColor = AnthropicStyle.mutedInk
+        introLabel.textColor = StickmanStyle.secondaryText
         introLabel.maximumNumberOfLines = 2
         introLabel.lineBreakMode = .byWordWrapping
 
@@ -76,7 +76,7 @@ final class PermissionCenterView: NSView {
     }
 }
 
-private final class StickmanPermissionRowView: NSView {
+private final class StickmanPermissionRowView: StickmanCardView {
     let actionButton: StickmanPermissionButton
     private let titleLabel: NSTextField
     private let detailLabel: NSTextField
@@ -89,19 +89,13 @@ private final class StickmanPermissionRowView: NSView {
         statusLabel = NSTextField(labelWithString: snapshot.status.title)
         super.init(frame: .zero)
 
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.52).cgColor
-        layer?.cornerRadius = 9
-        layer?.borderColor = AnthropicStyle.line.cgColor
-        layer?.borderWidth = 1
-
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = AnthropicStyle.ink
+        titleLabel.textColor = StickmanStyle.primaryText
         detailLabel.font = NSFont.systemFont(ofSize: 10.5)
-        detailLabel.textColor = AnthropicStyle.mutedInk
+        detailLabel.textColor = StickmanStyle.secondaryText
         detailLabel.lineBreakMode = .byTruncatingTail
         statusLabel.font = NSFont.systemFont(ofSize: 10.5, weight: .medium)
-        statusLabel.textColor = snapshot.status == .granted ? AnthropicStyle.clayDark : AnthropicStyle.mutedInk
+        statusLabel.textColor = snapshot.status == .granted ? NSColor.systemGreen : StickmanStyle.secondaryText
 
         actionButton.title = {
             switch snapshot.status {
@@ -113,9 +107,9 @@ private final class StickmanPermissionRowView: NSView {
         }()
         actionButton.isEnabled = snapshot.status != .unavailable
         if snapshot.status == .notRequested {
-            AnthropicStyle.configurePrimaryButton(actionButton)
+            StickmanStyle.configurePrimaryButton(actionButton)
         } else {
-            AnthropicStyle.configureSecondaryButton(actionButton)
+            StickmanStyle.configureSecondaryButton(actionButton)
         }
 
         addSubview(titleLabel)
@@ -127,11 +121,9 @@ private final class StickmanPermissionRowView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var isFlipped: Bool { true }
-
     override func layout() {
         super.layout()
-        let buttonWidth: CGFloat = 68
+        let buttonWidth: CGFloat = 84
         titleLabel.frame = NSRect(x: 11, y: 8, width: bounds.width - buttonWidth - 28, height: 17)
         detailLabel.frame = NSRect(x: 11, y: 27, width: bounds.width - buttonWidth - 28, height: 16)
         statusLabel.frame = NSRect(x: 11, y: 44, width: 130, height: 14)

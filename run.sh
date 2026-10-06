@@ -3,25 +3,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BUILD_DIR="$ROOT_DIR/.local-build"
-MODULE_CACHE_DIR="$BUILD_DIR/module-cache"
-OUTPUT_BIN="$BUILD_DIR/Stickman"
+SCRATCH_PATH="${STICKMAN_BUILD_PATH:-${TMPDIR:-/tmp}/stickman-build}/debug"
 
-mkdir -p "$MODULE_CACHE_DIR"
-
-swiftc \
-  -swift-version 5 \
-  -module-cache-path "$MODULE_CACHE_DIR" \
-  -framework AppKit \
-  -framework ApplicationServices \
-  -framework CoreGraphics \
-  -framework AVFoundation \
-  -framework EventKit \
-  -framework Security \
-  -framework UserNotifications \
-  -framework Network \
-  "$ROOT_DIR"/Sources/*.swift \
-  -o "$OUTPUT_BIN"
+cd "$ROOT_DIR"
+swift build --product Stickman --scratch-path "$SCRATCH_PATH"
+OUTPUT_BIN="$(swift build --scratch-path "$SCRATCH_PATH" --show-bin-path)/Stickman"
 
 if [[ ! -x "$OUTPUT_BIN" ]]; then
   echo "Stickman binary was not created" >&2

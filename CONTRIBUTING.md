@@ -28,7 +28,7 @@ No credential should ever be committed. Stickman reads API keys from environment
 - `Resources/`: runtime assets and signing entitlements
 - `scripts/`: build, verification, and packaging tools
 - `DesignConcepts/`: design research and generated preview artifacts
-- `NightLock/`: optional, separately built focus-tool prototype
+- `Blocker/`: Stickman Blocker's shared core, root daemon, installer, and recovery tool, built from the root `Package.swift`
 - `.github/workflows/`: clean-clone CI and tagged release automation
 
 ## Changing app identity

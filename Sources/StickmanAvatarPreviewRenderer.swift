@@ -2,6 +2,17 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
+/// Neutral colors for offscreen preview sheets.
+enum PreviewPalette {
+    static let background = NSColor(calibratedWhite: 0.94, alpha: 1)
+    static let panel = NSColor(calibratedWhite: 0.985, alpha: 1)
+    static let cell = NSColor(calibratedWhite: 0.955, alpha: 1)
+    static let rule = NSColor(calibratedWhite: 0, alpha: 0.08)
+    static let ink = NSColor(calibratedWhite: 0.1, alpha: 1)
+    static let muted = NSColor(calibratedWhite: 0.45, alpha: 1)
+    static let accent = NSColor.systemBlue
+}
+
 enum StickmanAvatarPreviewRenderer {
     static func render(to outputURL: URL) throws {
         let bitmap = try renderSheet(frameTimeOffset: 0, titleSuffix: "Preview")
@@ -59,8 +70,11 @@ enum StickmanAvatarPreviewRenderer {
     }
 
     private static func renderSheet(frameTimeOffset: TimeInterval, titleSuffix: String) throws -> NSBitmapImageRep {
-        let states = StickmanView.PreviewState.allCases
-        let frameTimes: [TimeInterval] = [0.15, 0.55, 1.05, 1.55, 2.15]
+        let environment = ProcessInfo.processInfo.environment
+        let requestedStates = environment["STICKMAN_PREVIEW_STATES"]?.split(separator: ",").compactMap { StickmanView.PreviewState(rawValue: String($0)) }
+        let states = requestedStates?.isEmpty == false ? requestedStates! : StickmanView.PreviewState.allCases
+        let requestedTimes = environment["STICKMAN_PREVIEW_TIMES"]?.split(separator: ",").compactMap { TimeInterval(String($0)) }
+        let frameTimes: [TimeInterval] = requestedTimes?.isEmpty == false ? requestedTimes! : [0.15, 0.55, 1.05, 1.55, 2.15]
         let avatarSize = NSSize(width: StickmanMetrics.characterSize, height: StickmanMetrics.characterSize)
         let labelWidth: CGFloat = 128
         let cellWidth: CGFloat = 178
@@ -97,7 +111,7 @@ enum StickmanAvatarPreviewRenderer {
         graphicsContext.cgContext.scaleBy(x: 1, y: -1)
         defer { NSGraphicsContext.restoreGraphicsState() }
 
-        AnthropicStyle.panel.setFill()
+        PreviewPalette.panel.setFill()
         NSRect(origin: .zero, size: imageSize).fill()
 
         drawTitle(in: imageSize, titleSuffix: titleSuffix)
@@ -123,14 +137,14 @@ enum StickmanAvatarPreviewRenderer {
     }
 
     private static func drawTitle(in imageSize: NSSize, titleSuffix: String) {
-        let title = "Stickman Stickman Native Animation \(titleSuffix)"
+        let title = "Stickman Animation \(titleSuffix)"
         let subtitle = "Rows are states; columns are sampled moments from each loop."
         drawText(
             title,
             at: CGPoint(x: 22, y: 14),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 18, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
+                .foregroundColor: PreviewPalette.ink
             ]
         )
         drawText(
@@ -138,7 +152,7 @@ enum StickmanAvatarPreviewRenderer {
             at: CGPoint(x: imageSize.width - 392, y: 18),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-                .foregroundColor: AnthropicStyle.mutedInk
+                .foregroundColor: PreviewPalette.muted
             ]
         )
     }
@@ -149,13 +163,13 @@ enum StickmanAvatarPreviewRenderer {
             at: CGPoint(x: sidePadding, y: rowY + 68),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
+                .foregroundColor: PreviewPalette.ink
             ]
         )
     }
 
     private static func drawRowGuide(rowY: CGFloat, imageWidth: CGFloat, sidePadding: CGFloat) {
-        AnthropicStyle.line.withAlphaComponent(0.42).setStroke()
+        PreviewPalette.rule.withAlphaComponent(0.42).setStroke()
         let path = NSBezierPath()
         path.move(to: CGPoint(x: sidePadding, y: rowY + 178))
         path.line(to: CGPoint(x: imageWidth - sidePadding, y: rowY + 178))
@@ -171,7 +185,7 @@ enum StickmanAvatarPreviewRenderer {
         size: NSSize
     ) {
         let frameRect = NSRect(origin: origin, size: size)
-        AnthropicStyle.inset.withAlphaComponent(0.72).setFill()
+        PreviewPalette.cell.withAlphaComponent(0.72).setFill()
         NSBezierPath(roundedRect: frameRect.insetBy(dx: 6, dy: 6), xRadius: 10, yRadius: 10).fill()
 
         let view = StickmanView(frame: NSRect(origin: .zero, size: size))
@@ -187,7 +201,7 @@ enum StickmanAvatarPreviewRenderer {
             at: CGPoint(x: origin.x + 62, y: origin.y + 164),
             attributes: [
                 .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular),
-                .foregroundColor: AnthropicStyle.mutedInk
+                .foregroundColor: PreviewPalette.muted
             ]
         )
     }

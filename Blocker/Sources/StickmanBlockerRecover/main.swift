@@ -13,7 +13,7 @@ do {
     let partTwo = try String(contentsOfFile: NightLockPaths.recoveryPartTwo, encoding: .utf8)
         .trimmingCharacters(in: .whitespacesAndNewlines)
 
-    print("NightLock emergency recovery requested.")
+    print("Stickman Blocker emergency recovery requested.")
     print("This key can disable enforcement or change the protected schedule.")
     print("Waiting 30 seconds to make this a deliberate action...")
     sleep(30)

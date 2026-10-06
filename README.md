@@ -4,13 +4,16 @@ Stickman is an open-source macOS desktop companion: a calm, screen-aware helper 
 
 The app is native Swift and AppKit. Its black stick figure is procedurally drawn and animated, so the repository does not bundle character artwork or frames from another production.
 
-![Stickman interface preview](DesignConcepts/StickmanPreview/window-preview-integrations.png)
+![Stickman interface preview](DesignConcepts/StickmanPreview/window-preview.png)
 
 ## Highlights
 
 - Transparent companion window that follows you across macOS Spaces
-- Original skeletal animation system with walking, cross-legged sitting, gestures, and combat poses
-- Peaceful mode by default; only a deliberate triple-click starts sparring
+- Gravity: he stands on the bottom of the screen and on top of your windows, leaps between them, and rides along when you drag a window
+- Skeletal animation with inverse kinematics: foot-planted walking and running, jumps, falls, landings, idle fidgets, and cross-legged sitting
+- Pick him up and throw him; he flails on the way down and lands
+- Native glass chat and settings panels that follow light and dark mode
+- Peaceful mode by default; only a deliberate Option+triple-click starts sparring
 - Request-scoped screenshot understanding and optional screen annotations
 - Text and realtime voice chat through the OpenAI API
 - Persistent background research agents
@@ -18,12 +21,12 @@ The app is native Swift and AppKit. Its black stick figure is procedurally drawn
 - Calendar summaries, meeting nudges, and optional proactive study preparation
 - Permission center with independent grants for sensitive capabilities
 - Configurable Canvas tenant with Keychain-backed credentials
-- Temporary focus sessions and an optional bedtime browser guard
+- Stickman Blocker: a protected, schedule-based website blocker with a "Blocked by Stickman" page, plus temporary focus sessions and a softer bedtime guard
 - Universal app builds for Apple Silicon and Intel Macs
 
 ## Requirements
 
-- macOS 12 or newer
+- macOS 13 or newer
 - Xcode 16 Command Line Tools or newer (`xcode-select --install`) when building from source
 - An OpenAI API key for AI and voice features
 - Google Chrome only for Chrome-specific actions; the rest of Stickman works without it
@@ -54,15 +57,50 @@ export STICKMAN_OPENROUTER_MODEL=google/gemini-2.5-flash
 | Action | Control |
 | --- | --- |
 | Open chat | Double-click Stickman |
-| Start sparring | Triple-click Stickman |
-| Walk somewhere | Right-click the destination |
-| Show or hide | `Option+B` |
+| Poke | Click Stickman once |
+| Pick up and throw | Drag Stickman, then let go mid-motion |
+| Start sparring | `Option`+triple-click Stickman |
+| Send him somewhere | `Option`+right-click a window to climb onto it, or empty space to walk there |
+| Close the panel | `Esc` |
+| Hide in the notch, or bring him back out | `Option+B` |
 | Quick screen-aware assist | `Option+Space` |
-| End sparring | `Option+F`, ask for a truce, or circle Stickman |
+| End sparring | `Option+F`, **Stop Fighting** in the menu bar, or circle Stickman with the cursor |
 | Open chat menu | `Control+-` |
 | Start voice mode | Press `Control+Option` together |
 
-After the same foreground window remains active for a minute, Stickman walks to its top-right corner and sits cross-legged. Switching or closing the window makes him stand and roam again.
+After the same foreground window stays active for a minute, Stickman walks or leaps to its top-right corner and sits cross-legged. Switching windows makes him stand up and stretch his legs. If a window he stands on closes or gets covered, he falls to the next ledge below.
+
+Left alone, he strolls along his ledge, hops between windows, and fidgets. After a few quiet minutes he sits down, then falls asleep. Turn off wandering in **Settings → General**.
+
+When Zoom, Meet, Teams, or a screen recorder starts capturing your screen, Stickman and his panel fade out. They come back a couple of seconds after the capture stops. Choose **Show Stickman Anyway** from the menu bar to keep him visible for the rest of that share, or turn the behavior off in **Settings → General**. macOS has no public API for this, so Stickman reads the window server's capture flag (the one behind the purple recording icon) through a private CoreGraphics call. It reads only whether a capture is running, never what is captured. If a future macOS removes the call, the setting turns itself off.
+
+## Stickman Blocker
+
+Stickman Blocker is the protected website blocker that used to be NightLock. A root helper enforces it through `/etc/hosts`, so quitting the app doesn't lift it, and changing the schedule takes the recovery key you generated at install. Blocked tabs land on a "Blocked by Stickman" page where he squares up and throws a jab.
+
+Install it from Stickman's menu bar menu (**Install Blocker Helper…**) or with `./stickman --install-blocker`. Once it's installed, Stickman starts at login and has no Quit command; press `Option+B` to tuck him into the notch instead. See [Blocker/README.md](Blocker/README.md) and [Blocker recovery](docs/BLOCKER_RECOVERY.md).
+
+## Claude Code
+
+Stickman can hand coding work to Claude Code and tap you when it's done. It runs Claude Code under its own profile folder (`~/.claude-personal` by default), so it can use a different account from the one your terminal and the Claude desktop app use.
+
+**Set up once**
+
+1. Open **Settings → Claude Code** and choose **Sign In…**. A terminal opens and signs that profile in through your browser. Pick your personal account. You can also run `CLAUDE_CONFIG_DIR="$HOME/.claude-personal" claude auth login` yourself.
+2. Add your project folders on the same tab. Star one to make it the default.
+3. For cloud sessions, connect GitHub to the same claude.ai account (run `/web-setup` inside a session on that profile, or connect it at claude.ai/code).
+
+**Use it**
+
+| Do this | Type or say |
+| --- | --- |
+| Start a background session | `/claude @project fix the failing test`, or "have Claude fix the failing test in project" |
+| Run it in the cloud instead | `/cloud @project write tests for the parser`, or add "in the cloud" |
+| See sessions | Click the terminal icon in the chat header, type `/sessions`, or pick **Claude Code Sessions** from the menu bar |
+
+Without a project name, Stickman uses the project named in the window you're looking at, then your default project. Background sessions run with the permission level you pick in settings. A session that needs approval waits, Stickman waves at you, and **Open** attaches it in Ghostty or Terminal. When a session finishes, he hops and posts a notification.
+
+Stickman checks the profile's sign-in only when you open the Claude Code tab or press refresh. Claude Code has an open bug where frequent sign-in checks can expire a profile's login ([claude-code#95822](https://github.com/anthropics/claude-code/issues/95822)). If a session reports "Login expired", sign in again from the same tab.
 
 ## Permissions and privacy
 

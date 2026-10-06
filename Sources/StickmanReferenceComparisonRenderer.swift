@@ -28,7 +28,7 @@ enum StickmanReferenceComparisonRenderer {
         graphicsContext.cgContext.scaleBy(x: 1, y: -1)
         defer { NSGraphicsContext.restoreGraphicsState() }
 
-        AnthropicStyle.parchment.setFill()
+        PreviewPalette.background.setFill()
         NSRect(origin: .zero, size: imageSize).fill()
         drawTitle()
 
@@ -53,7 +53,7 @@ enum StickmanReferenceComparisonRenderer {
             at: CGPoint(x: 44, y: 26),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 20, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
+                .foregroundColor: PreviewPalette.ink
             ]
         )
         drawText(
@@ -61,7 +61,7 @@ enum StickmanReferenceComparisonRenderer {
             at: CGPoint(x: 44, y: 54),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-                .foregroundColor: AnthropicStyle.mutedInk
+                .foregroundColor: PreviewPalette.muted
             ]
         )
     }
@@ -81,7 +81,7 @@ enum StickmanReferenceComparisonRenderer {
                 at: CGPoint(x: rect.minX + 24, y: rect.midY - 8),
                 attributes: [
                     .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-                    .foregroundColor: AnthropicStyle.clayDark
+                    .foregroundColor: PreviewPalette.accent
                 ]
             )
         }
@@ -90,7 +90,7 @@ enum StickmanReferenceComparisonRenderer {
             at: CGPoint(x: rect.minX, y: rect.maxY + 16),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
+                .foregroundColor: PreviewPalette.ink
             ]
         )
     }
@@ -109,7 +109,7 @@ enum StickmanReferenceComparisonRenderer {
             at: CGPoint(x: rect.minX, y: rect.maxY + 16),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
+                .foregroundColor: PreviewPalette.ink
             ]
         )
     }
@@ -131,29 +131,29 @@ enum StickmanReferenceComparisonRenderer {
             at: CGPoint(x: x, y: y),
             attributes: [
                 .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
+                .foregroundColor: PreviewPalette.ink
             ]
         )
 
         for (index, row) in rows.enumerated() {
             let rowY = y + 32 + CGFloat(index) * 24
-            AnthropicStyle.clay.setFill()
+            PreviewPalette.accent.setFill()
             NSBezierPath(ovalIn: NSRect(x: x, y: rowY + 4, width: 8, height: 8)).fill()
             drawText(
                 row,
                 at: CGPoint(x: x + 18, y: rowY),
                 attributes: [
                     .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-                    .foregroundColor: AnthropicStyle.mutedInk
+                    .foregroundColor: PreviewPalette.muted
                 ]
             )
         }
     }
 
     private static func drawCard(_ rect: NSRect) {
-        AnthropicStyle.panel.setFill()
+        PreviewPalette.panel.setFill()
         NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10).fill()
-        AnthropicStyle.line.setStroke()
+        PreviewPalette.rule.setStroke()
         let border = NSBezierPath(roundedRect: rect, xRadius: 10, yRadius: 10)
         border.lineWidth = 1
         border.stroke()

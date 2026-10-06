@@ -8,6 +8,7 @@ Stickman is permission-first: installing the app does not grant access to the sc
 - Background-agent state and focus settings are stored under `~/Library/Application Support/Stickman`.
 - Calendar notifications are scheduled locally.
 - Canvas configuration stores the school URL in UserDefaults and its token in Keychain.
+- Screen-share detection reads a yes-or-no flag from the window server about whether any capture is running. It never captures, reads, or stores screen content, and needs no permission.
 
 ## Data sent to model providers
 

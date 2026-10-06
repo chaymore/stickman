@@ -101,6 +101,9 @@ Stickman developer launcher
   ./stickman --install-app           Build and install /Applications/Stickman.app
   ./stickman --open-app              Open the installed app
   ./stickman --package               Create a release zip and checksum
+  ./stickman --install-blocker       Install or repair Stickman Blocker (needs admin)
+  ./stickman --blocker-status        Print Stickman Blocker's daemon status
+  ./stickman --recover-blocker       Reveal the blocker's recovery key (sudo, delayed)
 HELP
   exit 0
 fi
@@ -137,6 +140,30 @@ if [[ "${1:-}" == "--install-app" ]]; then
   echo "Installed Stickman.app to /Applications/Stickman.app"
   echo "Open it with: open \"/Applications/Stickman.app\""
   exit 0
+fi
+
+if [[ "${1:-}" == "--install-blocker" ]]; then
+  if [[ ! -x "/Applications/Stickman.app/Contents/MacOS/StickmanBlockerInstaller" ]]; then
+    "$0" --install-app
+  fi
+  echo "Installing Stickman Blocker. macOS will ask for administrator approval."
+  /usr/bin/osascript -e "do shell script \"'/Applications/Stickman.app/Contents/MacOS/StickmanBlockerInstaller'\" with administrator privileges"
+  exit 0
+fi
+
+if [[ "${1:-}" == "--blocker-status" ]]; then
+  if [[ -f "/Library/Application Support/NightLock/status.json" ]]; then
+    /bin/cat "/Library/Application Support/NightLock/status.json"
+  else
+    echo "Stickman Blocker is not installed, or its helper has not written status yet."
+    exit 1
+  fi
+  exit 0
+fi
+
+if [[ "${1:-}" == "--recover-blocker" ]]; then
+  echo "Recovery is deliberately protected and delayed. Read docs/BLOCKER_RECOVERY.md first."
+  exec /usr/bin/sudo "/Applications/Stickman.app/Contents/MacOS/stickman-blocker-recover"
 fi
 
 if [[ "${1:-}" == "--open-app" ]]; then
