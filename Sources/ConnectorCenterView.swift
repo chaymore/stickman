@@ -12,7 +12,7 @@ final class ConnectorCenterView: NSView {
         super.init(frame: frameRect)
 
         introLabel.font = NSFont.systemFont(ofSize: 12)
-        introLabel.textColor = AnthropicStyle.mutedInk
+        introLabel.textColor = StickmanStyle.secondaryText
         introLabel.maximumNumberOfLines = 2
         introLabel.lineBreakMode = .byWordWrapping
 
@@ -28,7 +28,7 @@ final class ConnectorCenterView: NSView {
         proactiveButton.target = self
         proactiveButton.action = #selector(proactiveSettingChanged)
         proactiveButton.font = NSFont.systemFont(ofSize: 11.5, weight: .medium)
-        proactiveButton.contentTintColor = AnthropicStyle.ink
+        proactiveButton.contentTintColor = StickmanStyle.primaryText
         proactiveButton.state = ProactiveStudyService.shared.isEnabled ? .on : .off
 
         for name in [Notification.Name.stickmanConnectorsDidChange, .stickmanPermissionsDidChange] {
@@ -98,7 +98,7 @@ final class ConnectorCenterView: NSView {
     }
 }
 
-private final class StickmanConnectorRowView: NSView {
+private final class StickmanConnectorRowView: StickmanCardView {
     let actionButton: StickmanConnectorButton
     private let titleLabel: NSTextField
     private let detailLabel: NSTextField
@@ -111,34 +111,28 @@ private final class StickmanConnectorRowView: NSView {
         statusLabel = NSTextField(labelWithString: snapshot.status.title)
         super.init(frame: .zero)
 
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.52).cgColor
-        layer?.cornerRadius = 9
-        layer?.borderColor = AnthropicStyle.line.cgColor
-        layer?.borderWidth = 1
-
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = AnthropicStyle.ink
+        titleLabel.textColor = StickmanStyle.primaryText
         detailLabel.font = NSFont.systemFont(ofSize: 10.5)
-        detailLabel.textColor = AnthropicStyle.mutedInk
+        detailLabel.textColor = StickmanStyle.secondaryText
         detailLabel.maximumNumberOfLines = 2
         detailLabel.lineBreakMode = .byTruncatingTail
         statusLabel.font = NSFont.systemFont(ofSize: 10.5, weight: .medium)
-        statusLabel.textColor = snapshot.status == .connected ? AnthropicStyle.clayDark : AnthropicStyle.mutedInk
+        statusLabel.textColor = snapshot.status == .connected ? NSColor.systemGreen : StickmanStyle.secondaryText
 
         switch snapshot.status {
         case .connected, .tokenSaved:
             actionButton.title = snapshot.kind.credentialService == nil ? "Manage" : "Remove"
-            AnthropicStyle.configureSecondaryButton(actionButton)
+            StickmanStyle.configureSecondaryButton(actionButton)
         case .ready:
             actionButton.title = "Connect"
-            AnthropicStyle.configurePrimaryButton(actionButton)
+            StickmanStyle.configurePrimaryButton(actionButton)
         case .setupRequired:
             actionButton.title = "Set up"
-            AnthropicStyle.configureSecondaryButton(actionButton)
+            StickmanStyle.configureSecondaryButton(actionButton)
         case .browserOnly:
             actionButton.title = "Open"
-            AnthropicStyle.configureSecondaryButton(actionButton)
+            StickmanStyle.configureSecondaryButton(actionButton)
         }
 
         addSubview(titleLabel)
@@ -150,11 +144,9 @@ private final class StickmanConnectorRowView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var isFlipped: Bool { true }
-
     override func layout() {
         super.layout()
-        let buttonWidth: CGFloat = 70
+        let buttonWidth: CGFloat = 84
         titleLabel.frame = NSRect(x: 11, y: 7, width: bounds.width - buttonWidth - 28, height: 17)
         detailLabel.frame = NSRect(x: 11, y: 25, width: bounds.width - buttonWidth - 28, height: 29)
         statusLabel.frame = NSRect(x: 11, y: 52, width: 140, height: 14)

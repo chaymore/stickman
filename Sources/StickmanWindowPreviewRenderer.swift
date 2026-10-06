@@ -1,15 +1,20 @@
 import AppKit
 
+/// Renders the chat and settings panels in light and dark mode beside Stickman.
+/// The live frosted blur cannot be captured offscreen, so panels use an opaque stand-in.
 enum StickmanWindowPreviewRenderer {
     static func render(to outputURL: URL) throws {
-        let chatSize = NSSize(width: 500, height: 350)
-        let settingsSize = NSSize(width: 560, height: 430)
-        let padding: CGFloat = 24
-        let titleHeight: CGFloat = 48
-        let gap: CGFloat = 28
+        let tail = StickmanPanelShape.tailWidth
+        let chatSize = NSSize(width: StickmanCompanionPanelController.chatSize.width + tail, height: StickmanCompanionPanelController.chatSize.height)
+        let settingsSize = NSSize(width: StickmanCompanionPanelController.settingsSize.width + tail, height: StickmanCompanionPanelController.settingsSize.height)
+        let character = StickmanMetrics.characterSize
+        let padding: CGFloat = 32
+        let gap: CGFloat = 36
+        let titleHeight: CGFloat = 52
+        let rowHeight = max(chatSize.height, settingsSize.height) + 34
         let imageSize = NSSize(
-            width: padding * 2 + chatSize.width + gap + settingsSize.width * 2 + gap,
-            height: padding * 2 + titleHeight + max(chatSize.height, settingsSize.height)
+            width: padding * 2 + character * 0.6 + chatSize.width + gap + settingsSize.width * 2 + gap,
+            height: padding + titleHeight + rowHeight * 2 + padding
         )
 
         guard
@@ -37,48 +42,48 @@ enum StickmanWindowPreviewRenderer {
         graphicsContext.cgContext.scaleBy(x: 1, y: -1)
         defer { NSGraphicsContext.restoreGraphicsState() }
 
-        AnthropicStyle.parchment.setFill()
+        PreviewPalette.background.setFill()
         NSRect(origin: .zero, size: imageSize).fill()
         drawText(
-            "Stickman Interaction Window Preview",
-            at: CGPoint(x: padding, y: 18),
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 18, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
-            ]
+            "Stickman Panels",
+            at: CGPoint(x: padding, y: 22),
+            attributes: [.font: NSFont.systemFont(ofSize: 18, weight: .semibold), .foregroundColor: PreviewPalette.ink]
         )
         drawText(
-            "Anthropic-inspired cream surfaces, clay actions, compact AppKit controls.",
-            at: CGPoint(x: padding + 300, y: 22),
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .regular),
-                .foregroundColor: AnthropicStyle.mutedInk
-            ]
+            "Native glass in light and dark mode. Offscreen renders use an opaque stand-in for the live blur.",
+            at: CGPoint(x: padding + 160, y: 26),
+            attributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: PreviewPalette.muted]
         )
 
-        let chatPanel = StickmanChatPanelView(frame: NSRect(origin: .zero, size: chatSize))
-        chatPanel.layoutSubtreeIfNeeded()
-        drawPanel(chatPanel, title: "Chat", at: CGPoint(x: padding, y: padding + titleHeight), size: chatSize)
+        for (rowIndex, appearanceName) in [NSAppearance.Name.aqua, .darkAqua].enumerated() {
+            guard let appearance = NSAppearance(named: appearanceName) else { continue }
+            let rowY = padding + titleHeight + CGFloat(rowIndex) * rowHeight
+            let rowRect = NSRect(x: padding - 12, y: rowY - 8, width: imageSize.width - padding * 2 + 24, height: rowHeight - 10)
+            drawDesktop(in: rowRect, dark: rowIndex == 1)
 
-        let settingsPanel = StickmanSettingsPanelView(frame: NSRect(origin: .zero, size: settingsSize))
-        settingsPanel.showPermissionsForPreview()
-        settingsPanel.layoutSubtreeIfNeeded()
-        drawPanel(
-            settingsPanel,
-            title: "Settings · Permissions",
-            at: CGPoint(x: padding + chatSize.width + gap, y: padding + titleHeight),
-            size: settingsSize
-        )
+            var x = padding + character * 0.6
+            let panelY = rowY + 18
 
-        let connectionsPanel = StickmanSettingsPanelView(frame: NSRect(origin: .zero, size: settingsSize))
-        connectionsPanel.showConnectionsForPreview()
-        connectionsPanel.layoutSubtreeIfNeeded()
-        drawPanel(
-            connectionsPanel,
-            title: "Settings · Connections",
-            at: CGPoint(x: padding + chatSize.width + gap + settingsSize.width + gap, y: padding + titleHeight),
-            size: settingsSize
-        )
+            let stickman = StickmanView(frame: NSRect(x: 0, y: 0, width: character, height: character))
+            stickman.setPreviewState(.listening, time: 0.4)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current?.cgContext.translateBy(x: x - character * 0.5 - 10, y: panelY + chatSize.height - character + StickmanMetrics.footInset - 4)
+            stickman.draw(stickman.bounds)
+            NSGraphicsContext.restoreGraphicsState()
+
+            let chat = StickmanChatPanelView(frame: NSRect(origin: .zero, size: StickmanCompanionPanelController.chatSize))
+            chat.loadPreviewConversation()
+            drawPanel(chat, size: chatSize, at: CGPoint(x: x, y: panelY), appearance: appearance, label: rowIndex == 0 ? "Chat" : nil)
+            x += chatSize.width + gap
+
+            let general = StickmanSettingsPanelView(frame: NSRect(origin: .zero, size: StickmanCompanionPanelController.settingsSize))
+            drawPanel(general, size: settingsSize, at: CGPoint(x: x, y: panelY), appearance: appearance, label: rowIndex == 0 ? "Settings · General" : nil)
+            x += settingsSize.width + gap
+
+            let claudeCode = StickmanSettingsPanelView(frame: NSRect(origin: .zero, size: StickmanCompanionPanelController.settingsSize))
+            claudeCode.showClaudeCodeForPreview()
+            drawPanel(claudeCode, size: settingsSize, at: CGPoint(x: x, y: panelY), appearance: appearance, label: rowIndex == 0 ? "Settings · Claude Code" : nil)
+        }
 
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
             throw PreviewError.encodingFailed
@@ -89,35 +94,50 @@ enum StickmanWindowPreviewRenderer {
         try png.write(to: outputURL, options: .atomic)
     }
 
-    private static func drawPanel(_ panel: NSView, title: String, at origin: CGPoint, size: NSSize) {
-        drawText(
-            title,
-            at: CGPoint(x: origin.x, y: origin.y - 20),
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 13, weight: .semibold),
-                .foregroundColor: AnthropicStyle.ink
-            ]
-        )
+    private static func drawDesktop(in rect: NSRect, dark: Bool) {
+        let colors = dark
+            ? [NSColor(calibratedRed: 0.10, green: 0.12, blue: 0.20, alpha: 1), NSColor(calibratedRed: 0.20, green: 0.16, blue: 0.28, alpha: 1)]
+            : [NSColor(calibratedRed: 0.72, green: 0.80, blue: 0.90, alpha: 1), NSColor(calibratedRed: 0.90, green: 0.84, blue: 0.86, alpha: 1)]
+        let path = NSBezierPath(roundedRect: rect, xRadius: 16, yRadius: 16)
+        NSGradient(colors: colors)?.draw(in: path, angle: -30)
+    }
 
-        guard let panelBitmap = panel.bitmapImageRepForCachingDisplay(in: panel.bounds) else { return }
-        panel.cacheDisplay(in: panel.bounds, to: panelBitmap)
+    private static func drawPanel(_ content: NSView, size: NSSize, at origin: CGPoint, appearance: NSAppearance, label: String?) {
+        if let label {
+            drawText(label, at: CGPoint(x: origin.x + 12, y: origin.y - 22), attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: PreviewPalette.ink
+            ])
+        }
+        let glass = StickmanGlassView(frame: NSRect(origin: .zero, size: size))
+        glass.rendersPreviewBackdrop = true
+        glass.tail = .left(y: size.height - 70)
+        content.frame = NSRect(x: StickmanPanelShape.tailWidth, y: 0, width: size.width - StickmanPanelShape.tailWidth, height: size.height)
+        glass.addContent(content)
+        drawView(glass, at: origin, appearance: appearance, clip: StickmanPanelShape.path(in: glass.bounds, tail: glass.tail))
+    }
 
-        guard let context = NSGraphicsContext.current?.cgContext else { return }
+    private static func drawView(_ view: NSView, at origin: CGPoint, appearance: NSAppearance, clip: NSBezierPath) {
+        view.appearance = appearance
+        var bitmap: NSBitmapImageRep?
+        appearance.performAsCurrentDrawingAppearance {
+            view.layoutSubtreeIfNeeded()
+            bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+            if let bitmap { view.cacheDisplay(in: view.bounds, to: bitmap) }
+        }
+        guard let bitmap, let context = NSGraphicsContext.current?.cgContext else { return }
         context.saveGState()
-        context.translateBy(x: origin.x, y: origin.y + size.height)
+        context.translateBy(x: origin.x, y: origin.y + view.bounds.height)
         context.scaleBy(x: 1, y: -1)
-        panelBitmap.draw(in: NSRect(origin: .zero, size: size))
+        // Layer-backed views cache with opaque corners; clip to the panel's real shape.
+        clip.addClip()
+        bitmap.draw(in: NSRect(origin: .zero, size: view.bounds.size))
         context.restoreGState()
     }
 
-    private static func drawText(
-        _ text: String,
-        at point: CGPoint,
-        attributes: [NSAttributedString.Key: Any]
-    ) {
+    private static func drawText(_ text: String, at point: CGPoint, attributes: [NSAttributedString.Key: Any]) {
         let size = text.size(withAttributes: attributes)
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-
         context.saveGState()
         context.translateBy(x: point.x, y: point.y + size.height)
         context.scaleBy(x: 1, y: -1)

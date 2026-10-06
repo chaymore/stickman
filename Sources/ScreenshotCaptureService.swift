@@ -21,6 +21,8 @@ final class ScreenshotCaptureService {
     private init() {}
 
     func captureMainDisplay() throws -> ScreenshotAttachment {
+        // Stickman's own capture should not read as the user sharing their screen.
+        ScreenShareMonitor.shared.ignoreOwnCapture()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("stickman-screenshot-\(UUID().uuidString).png")
 

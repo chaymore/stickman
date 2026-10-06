@@ -9,21 +9,21 @@ enum StickmanPreviewArtifactQA {
                 label: "Avatar states PNG",
                 url: previewRoot.appendingPathComponent("avatar-states.png"),
                 expectedWidth: 1062,
-                expectedHeight: 1976,
+                expectedHeight: 4826,
                 expectedFrameCount: 1
             ),
             ImageCheck(
                 label: "Avatar states GIF",
                 url: previewRoot.appendingPathComponent("avatar-states.gif"),
                 expectedWidth: 1062,
-                expectedHeight: 1976,
+                expectedHeight: 4826,
                 expectedFrameCount: 36
             ),
             ImageCheck(
                 label: "Window preview PNG",
                 url: previewRoot.appendingPathComponent("window-preview.png"),
-                expectedWidth: 1076,
-                expectedHeight: 526,
+                expectedWidth: 1733,
+                expectedHeight: 1224,
                 expectedFrameCount: 1
             ),
             ImageCheck(

@@ -8,6 +8,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var agentStatusMenuItem: NSMenuItem?
     private var rightClickMonitors: [Any] = []
     private var isStickmanVisible = false
+    private var screenShareObserver: NSObjectProtocol?
+    private var shareStatusMenuItem: NSMenuItem?
+    private var showMenuItem: NSMenuItem?
+    private var stopFightingMenuItem: NSMenuItem?
+    /// Set when the user summons Stickman during a share; cleared when the share ends.
+    private var showsDuringCurrentShare = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LegacyMigrationService.runIfNeeded()
@@ -32,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotKeyManager.register()
         self.hotKeyManager = hotKeyManager
         installRightClickTracking()
+        startScreenShareGuard()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -43,6 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             NSEvent.removeMonitor(monitor)
         }
         rightClickMonitors.removeAll()
+        ScreenShareMonitor.shared.stop()
+        if let screenShareObserver { NotificationCenter.default.removeObserver(screenShareObserver) }
         WebsiteBlockerService.shared.stop()
         ScreenEffectsOverlayController.shared.stop()
         BackgroundAgentCoordinator.shared.stop()
@@ -52,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func toggleStickman() {
-        if isStickmanVisible {
+        if isStickmanVisible, stickmanWindowController?.isHiddenForScreenShare != true {
             hideStickman()
         } else {
             showStickman()
@@ -61,9 +70,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showStickman() {
         let controller = stickmanWindowController ?? StickmanWindowController()
-        controller.showStickman()
         stickmanWindowController = controller
         isStickmanVisible = true
+        // Asking for Stickman while sharing means the user wants him on screen anyway.
+        if ScreenShareMonitor.shared.isSharing { showsDuringCurrentShare = true }
+        applyScreenShareState()
+        controller.showStickman()
+    }
+
+    private func startScreenShareGuard() {
+        screenShareObserver = NotificationCenter.default.addObserver(
+            forName: .stickmanScreenShareDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            if !ScreenShareMonitor.shared.isSharing { self.showsDuringCurrentShare = false }
+            self.applyScreenShareState()
+        }
+        ScreenShareMonitor.shared.start()
+    }
+
+    private func applyScreenShareState() {
+        let hide = ScreenShareMonitor.shared.isSharing
+            && StickmanSettingsPanelView.hidesDuringScreenShare
+            && !showsDuringCurrentShare
+        stickmanWindowController?.setHiddenForScreenShare(hide)
     }
 
     private func hideStickman() {
@@ -72,12 +104,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func installRightClickTracking() {
-        let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .rightMouseDown) { [weak self] _ in
+        let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
+            guard HotKeyManager.isWalkClick(flags: event.modifierFlags) else { return }
             self?.walkStickman(to: NSEvent.mouseLocation)
         }
 
         let localMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
-            self?.walkStickman(to: NSEvent.mouseLocation)
+            if HotKeyManager.isWalkClick(flags: event.modifierFlags) {
+                self?.walkStickman(to: NSEvent.mouseLocation)
+            }
             return event
         }
 
@@ -85,29 +120,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func walkStickman(to screenPoint: NSPoint) {
-        guard isStickmanVisible else { return }
+        guard isStickmanVisible, stickmanWindowController?.isHiddenForScreenShare != true else { return }
         DispatchQueue.main.async { [weak self] in
             self?.stickmanWindowController?.walkStickman(to: screenPoint)
         }
     }
 
     private func quickAssist() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.quickAssist()
     }
 
     private func openMenu() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.openMenu()
     }
 
     private func startVoiceMode() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.startVoiceMode()
     }
 
     private func toggleCombat() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.toggleCombatMode()
     }
 
@@ -118,9 +153,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let menu = NSMenu(title: "Stickman")
         menu.delegate = self
-        menu.addItem(withTitle: "Show Stickman", action: #selector(showStickmanFromMenu), keyEquivalent: "")
+        let shareItem = menu.addItem(withTitle: "Hidden while your screen is shared", action: nil, keyEquivalent: "")
+        shareItem.isEnabled = false
+        shareItem.isHidden = true
+        shareStatusMenuItem = shareItem
+        showMenuItem = menu.addItem(withTitle: "Show Stickman", action: #selector(showStickmanFromMenu), keyEquivalent: "")
         menu.addItem(withTitle: "Talk to Stickman", action: #selector(openChatFromMenu), keyEquivalent: "")
         menu.addItem(withTitle: "Start Voice", action: #selector(startVoiceFromMenu), keyEquivalent: "")
+        menu.addItem(withTitle: "Claude Code Sessions", action: #selector(showClaudeSessionsFromMenu), keyEquivalent: "")
         let agentItem = menu.addItem(withTitle: "Background Agents", action: #selector(showAgentsFromMenu), keyEquivalent: "")
         agentStatusMenuItem = agentItem
         menu.addItem(.separator())
@@ -128,9 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Permissions…", action: #selector(openPermissionsFromMenu), keyEquivalent: "")
         menu.addItem(withTitle: "Connections…", action: #selector(openConnectionsFromMenu), keyEquivalent: "")
         menu.addItem(withTitle: "Hide Stickman", action: #selector(hideStickmanFromMenu), keyEquivalent: "")
+        let stopFighting = menu.addItem(withTitle: "Stop Fighting", action: #selector(stopFightingFromMenu), keyEquivalent: "")
+        stopFighting.isHidden = true
+        stopFightingMenuItem = stopFighting
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Stickman", action: #selector(quitFromMenu), keyEquivalent: "q")
-        for menuItem in menu.items { menuItem.target = self }
+        for menuItem in menu.items where menuItem.action != nil { menuItem.target = self }
         item.menu = menu
         statusItem = item
     }
@@ -138,33 +181,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         let count = BackgroundAgentCoordinator.shared.activeCount
         agentStatusMenuItem?.title = count == 0 ? "Background Agents" : "Background Agents (\(count) working)"
+        let hiddenForShare = isStickmanVisible && stickmanWindowController?.isHiddenForScreenShare == true
+        shareStatusMenuItem?.isHidden = !hiddenForShare
+        showMenuItem?.title = hiddenForShare ? "Show Stickman Anyway" : "Show Stickman"
+        stopFightingMenuItem?.isHidden = StickmanModeController.shared.mode != .sparring
+    }
+
+    @objc private func stopFightingFromMenu() {
+        StickmanModeController.shared.setMode(.peaceful, reason: "menu")
     }
 
     @objc private func showStickmanFromMenu() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
+    }
+
+    /// Shows Stickman if he is hidden by the user or by a screen share.
+    private func summonIfNeeded() {
+        if !isStickmanVisible || stickmanWindowController?.isHiddenForScreenShare == true { showStickman() }
     }
 
     @objc private func openChatFromMenu() { openMenu() }
 
     @objc private func startVoiceFromMenu() { startVoiceMode() }
 
+    @objc private func showClaudeSessionsFromMenu() {
+        summonIfNeeded()
+        stickmanWindowController?.showClaudeSessions()
+    }
+
     @objc private func showAgentsFromMenu() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.showAgentStatus()
     }
 
     @objc private func openSettingsFromMenu() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.openSettings()
     }
 
     @objc private func openPermissionsFromMenu() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.openPermissions()
     }
 
     @objc private func openConnectionsFromMenu() {
-        if !isStickmanVisible { showStickman() }
+        summonIfNeeded()
         stickmanWindowController?.openConnections()
     }
 

@@ -1,5 +1,37 @@
 import AppKit
 
+/// What the body is doing in the world, reported by the window controller every frame.
+enum StickmanMotion: Equatable {
+    /// Standing or walking on a ledge. Velocity is in screen points per second.
+    case grounded(velocityX: CGFloat)
+    /// Winding up before a jump, from 0 to 1.
+    case crouching(progress: CGFloat)
+    case airborne(velocity: CGVector, planned: Bool)
+    case held(velocity: CGVector)
+}
+
+enum StickmanFidget: CaseIterable {
+    case lookAround
+    case stretch
+    case tapFoot
+    case wave
+
+    var duration: TimeInterval {
+        switch self {
+        case .lookAround: return 2.4
+        case .stretch: return 2.2
+        case .tapFoot: return 2.0
+        case .wave: return 1.6
+        }
+    }
+}
+
+enum StickmanRest: Equatable {
+    case awake
+    case sitting
+    case sleeping
+}
+
 final class StickmanView: NSView {
     enum Activity {
         case quiet
@@ -13,10 +45,15 @@ final class StickmanView: NSView {
 
     enum PreviewState: String, CaseIterable {
         case idle
+        case walking
+        case running
+        case crouching
+        case jumping
+        case falling
+        case landing
+        case held
         case listening
         case thinking
-        case walking
-        case reaching
         case happy
         case speaking
         case working
@@ -25,9 +62,10 @@ final class StickmanView: NSView {
         case calendarPeek
         case permissionKey
         case connectorLink
+        case stretching
         case error
-        case sleeping
         case perched
+        case sleeping
         case sparring
         case punch
         case kick
@@ -37,13 +75,29 @@ final class StickmanView: NSView {
 
     var onToggleChat: (() -> Void)?
     var onCursorStrike: ((CGPoint) -> Void)?
+    var onDragBegan: ((CGPoint) -> Void)?
+    var onDragMoved: ((CGPoint) -> Void)?
+    var onDragEnded: ((CGPoint) -> Void)?
+    var onPoke: (() -> Void)?
 
-    private enum StickmanState {
+    // MARK: Skeleton
+
+    private enum Bone {
+        static let torso: CGFloat = 44
+        static let neck: CGFloat = 22
+        static let upperArm: CGFloat = 24
+        static let forearm: CGFloat = 23
+        static let thigh: CGFloat = 29
+        static let shin: CGFloat = 28.8
+        static let ground: CGFloat = 145
+        static let headRadius: CGFloat = 17
+    }
+
+    private enum StickmanState: Equatable {
         case idle
         case listening
         case thinking
-        case walking
-        case reaching
+        case locomotion
         case happy
         case speaking
         case working
@@ -53,11 +107,17 @@ final class StickmanView: NSView {
         case permissionKey
         case connectorLink
         case error
+        case sitting
         case sleeping
-        case perched
-        case combat
+        case combat(serial: Int)
+        case crouching
+        case airborne
+        case landing
+        case held
+        case fidget(StickmanFidget)
     }
 
+    /// An authored pose. Hands and feet are IK targets; elbows and knees only pick the bend side.
     private struct StickPose {
         var head: CGPoint
         var neck: CGPoint
@@ -72,11 +132,11 @@ final class StickmanView: NSView {
         var rightFoot: CGPoint
         var headTilt: CGFloat = 0
         var bodyLean: CGFloat = 0
+        /// Rotation of the whole body around the head, used while dangling from the cursor.
+        var hangSwing: CGFloat = 0
 
         func blended(toward other: StickPose, amount: CGFloat) -> StickPose {
-            func point(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
-                CGPoint(x: a.x + (b.x - a.x) * amount, y: a.y + (b.y - a.y) * amount)
-            }
+            func point(_ a: CGPoint, _ b: CGPoint) -> CGPoint { SMath.mix(a, b, amount) }
             return StickPose(
                 head: point(head, other.head),
                 neck: point(neck, other.neck),
@@ -89,54 +149,91 @@ final class StickmanView: NSView {
                 leftFoot: point(leftFoot, other.leftFoot),
                 rightKnee: point(rightKnee, other.rightKnee),
                 rightFoot: point(rightFoot, other.rightFoot),
-                headTilt: headTilt + (other.headTilt - headTilt) * amount,
-                bodyLean: bodyLean + (other.bodyLean - bodyLean) * amount
+                headTilt: SMath.mix(headTilt, other.headTilt, amount),
+                bodyLean: SMath.mix(bodyLean, other.bodyLean, amount),
+                hangSwing: SMath.mix(hangSwing, other.hangSwing, amount)
             )
         }
 
         func offsetBy(dx: CGFloat, dy: CGFloat) -> StickPose {
             var copy = self
-            copy.head.x += dx; copy.head.y += dy
-            copy.neck.x += dx; copy.neck.y += dy
-            copy.hip.x += dx; copy.hip.y += dy
-            copy.leftElbow.x += dx; copy.leftElbow.y += dy
-            copy.leftHand.x += dx; copy.leftHand.y += dy
-            copy.rightElbow.x += dx; copy.rightElbow.y += dy
-            copy.rightHand.x += dx; copy.rightHand.y += dy
-            copy.leftKnee.x += dx; copy.leftKnee.y += dy
-            copy.leftFoot.x += dx; copy.leftFoot.y += dy
-            copy.rightKnee.x += dx; copy.rightKnee.y += dy
-            copy.rightFoot.x += dx; copy.rightFoot.y += dy
+            for keyPath in StickPose.points { copy[keyPath: keyPath].x += dx; copy[keyPath: keyPath].y += dy }
             return copy
         }
+
+        static let points: [WritableKeyPath<StickPose, CGPoint>] = [
+            \.head, \.neck, \.hip, \.leftElbow, \.leftHand, \.rightElbow, \.rightHand,
+            \.leftKnee, \.leftFoot, \.rightKnee, \.rightFoot
+        ]
     }
 
-    private var displayTimer: Timer?
+    /// The solved figure that gets drawn: every bone at its true length.
+    private struct Skeleton {
+        var head: CGPoint
+        var neck: CGPoint
+        var hip: CGPoint
+        var leftElbow: CGPoint
+        var leftHand: CGPoint
+        var rightElbow: CGPoint
+        var rightHand: CGPoint
+        var leftKnee: CGPoint
+        var leftFoot: CGPoint
+        var rightKnee: CGPoint
+        var rightFoot: CGPoint
+    }
+
+    // MARK: State
+
     private var time: TimeInterval = 0
     private var activity: Activity = .quiet
     private var mode: StickmanMode = .peaceful
+    private var rest: StickmanRest = .awake
     private var isChatVisible = false
-    private var locomotionIntensity: CGFloat = 0
-    private var facingDirection: CGFloat = 1
-    private var navigationGripPoint: CGPoint?
-    private var jumpStartedAt: TimeInterval?
+    private var motion: StickmanMotion = .grounded(velocityX: 0)
+    private var heightAboveGround: CGFloat = 0
+    private var isWalking = false
+    private var gaitPhase: CGFloat = 0
+    private static let walkStride: CGFloat = 46
+    private static let runStride: CGFloat = 68
+    private var strideLength: CGFloat = 46
+    private var runBlend: CGFloat = 0
+    private var smoothedAcceleration: CGFloat = 0
+    private var lastGroundVelocity: CGFloat = 0
+    private var swingAngle: CGFloat = 0
+    private var swingVelocity: CGFloat = 0
+    private(set) var facingDirection: CGFloat = 1
+    private var facingScale: CGFloat = 1
     private var transientState: StickmanState?
     private var transientEndsAt: TimeInterval = 0
     private var taskAnimation: StickmanTaskAnimation?
     private var taskAnimationStartedAt: TimeInterval = 0
     private var taskAnimationEndsAt: TimeInterval = 0
-    private var previewState: PreviewState?
-    private var previewTime: TimeInterval?
+    private var fidget: StickmanFidget?
+    private var fidgetStartedAt: TimeInterval = 0
+    private var landingStartedAt: TimeInterval = -10
+    private var landingDuration: TimeInterval = 0
+    private var landingImpact: CGFloat = 0
     private var combatMove: StickmanCombatMove = .guardStance
     private var combatMoveStartedAt: TimeInterval = 0
     private var combatMoveEndsAt: TimeInterval = 0
-    private var pose = StickmanView.neutralPose()
-    private var dragOriginInWindow: CGPoint?
-    private var windowOriginAtDragStart: CGPoint?
-    private var showsChatHint = true
-    private var isPerched = false
+    private var combatSerial = 0
+    private var previewState: PreviewState?
+
+    private var displayedState: StickmanState = .idle
+    private var transitionFrom: StickPose?
+    private var transitionStartedAt: TimeInterval = 0
+    private var transitionDuration: TimeInterval = 0.2
+    private var blendedPose = StickmanView.neutralPose()
+    private var skeleton: Skeleton
+
+    private var mouseDownScreenPoint: CGPoint?
+    private var isDraggingFigure = false
+    private var pendingPoke: DispatchWorkItem?
+    private var isHovering = false
+    private var hoverAlpha: CGFloat = 0
 
     override init(frame frameRect: NSRect) {
+        skeleton = StickmanView.solve(StickmanView.neutralPose())
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.clear.cgColor
@@ -147,18 +244,22 @@ final class StickmanView: NSView {
             name: .stickmanModeDidChange,
             object: nil
         )
-        startAnimation()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     deinit {
-        displayTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 
     override var isFlipped: Bool { true }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    private var renderScale: CGFloat { max(0.01, min(bounds.width, bounds.height) / StickmanMetrics.designSize) }
+
+    // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -166,35 +267,193 @@ final class StickmanView: NSView {
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
 
-        let scale = min(bounds.width, bounds.height) / StickmanMetrics.designSize
         context.saveGState()
-        context.scaleBy(x: scale, y: scale)
-
-        if facingDirection < 0 {
-            context.translateBy(x: 80, y: 0)
-            context.scaleBy(x: -1, y: 1)
-            context.translateBy(x: -80, y: 0)
-        }
+        context.scaleBy(x: renderScale, y: renderScale)
 
         drawShadow(context: context)
+        drawLandingDust(context: context)
+
+        context.saveGState()
+        let flip = facingScale >= 0 ? max(0.08, facingScale) : min(-0.08, facingScale)
+        context.translateBy(x: 80, y: 0)
+        context.scaleBy(x: flip, y: 1)
+        context.translateBy(x: -80, y: 0)
         drawMotionAccents(context: context)
-        drawStickFigure(pose: pose, context: context)
+        drawStickFigure(context: context)
         drawTaskEffects(context: context)
+        context.restoreGState()
+
+        drawSleepMarks(context: context, flip: flip)
         context.restoreGState()
 
         drawChatHint()
     }
 
-    override func mouseDown(with event: NSEvent) {
-        if event.clickCount >= 3, mode == .peaceful {
-            StickmanModeController.shared.beginSparringFromTripleClick()
-            return
-        }
-        if event.clickCount == 2, mode == .peaceful {
-            onToggleChat?()
-            return
+    private func drawStickFigure(context: CGContext) {
+        let halo = NSColor.white.withAlphaComponent(0.72)
+        let width: CGFloat = mode == .sparring ? 7.5 : 7
+        strokeSkeleton(skeleton, context: context, color: halo, width: width + 5)
+        strokeSkeleton(skeleton, context: context, color: .black, width: width)
+
+        let r = Bone.headRadius
+        let headRect = CGRect(x: skeleton.head.x - r, y: skeleton.head.y - r, width: r * 2, height: r * 2)
+        context.setStrokeColor(halo.cgColor)
+        context.setLineWidth(width + 5)
+        context.strokeEllipse(in: headRect)
+        context.setStrokeColor(NSColor.black.cgColor)
+        context.setLineWidth(width)
+        context.strokeEllipse(in: headRect)
+
+        if mode == .sparring { drawCombatFocusMark(at: skeleton.head, context: context) }
+    }
+
+    private func strokeSkeleton(_ figure: Skeleton, context: CGContext, color: NSColor, width: CGFloat) {
+        context.saveGState()
+        context.setStrokeColor(color.cgColor)
+        context.setLineWidth(width)
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+
+        func segment(_ points: [CGPoint]) {
+            guard let first = points.first else { return }
+            context.move(to: first)
+            points.dropFirst().forEach(context.addLine)
+            context.strokePath()
         }
 
+        segment([figure.neck, figure.hip])
+        segment([figure.neck, figure.leftElbow, figure.leftHand])
+        segment([figure.neck, figure.rightElbow, figure.rightHand])
+        segment([figure.hip, figure.leftKnee, figure.leftFoot])
+        segment([figure.hip, figure.rightKnee, figure.rightFoot])
+        context.restoreGState()
+    }
+
+    private func drawShadow(context: CGContext) {
+        let lift = heightAboveGround / renderScale
+        let feetY = max(skeleton.leftFoot.y, skeleton.rightFoot.y)
+        let poseLift = max(0, Bone.ground - feetY)
+        let total = lift + poseLift
+        guard total < 90 else { return }
+        let width = max(18, 62 - total * 0.5)
+        let alpha = max(0, 0.16 - total * 0.0018)
+        context.setFillColor(NSColor.black.withAlphaComponent(alpha).cgColor)
+        let centerX = 80 + (skeleton.hip.x - 80) * 0.6 * (facingScale >= 0 ? 1 : -1)
+        context.fillEllipse(in: CGRect(x: centerX - width / 2, y: 148 + lift, width: width, height: 7))
+    }
+
+    private func drawLandingDust(context: CGContext) {
+        let elapsed = time - landingStartedAt
+        guard landingImpact > 520, elapsed < 0.42 else { return }
+        let progress = CGFloat(elapsed / 0.42)
+        let strength = min(1, (landingImpact - 520) / 1200)
+        context.saveGState()
+        context.setLineCap(.round)
+        context.setStrokeColor(NSColor.black.withAlphaComponent(0.5 * (1 - progress) * (0.4 + strength * 0.6)).cgColor)
+        context.setLineWidth(2.2)
+        for side in [-1.0, 1.0] as [CGFloat] {
+            for index in 0 ..< 3 {
+                let spread = 18 + progress * (26 + strength * 18) + CGFloat(index) * 6
+                let x = 80 + side * spread
+                let y = 146 - CGFloat(index) * 4 - progress * 6
+                context.move(to: CGPoint(x: x - side * 5, y: y + 2))
+                context.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+        context.strokePath()
+        context.restoreGState()
+    }
+
+    private func drawMotionAccents(context: CGContext) {
+        guard mode == .sparring else { return }
+        let elapsed = time - combatMoveStartedAt
+        guard elapsed < 0.48 else { return }
+        switch combatMove {
+        case .jab, .kick, .dodge, .hit:
+            context.saveGState()
+            context.setStrokeColor(NSColor.black.withAlphaComponent(max(0, 0.35 - CGFloat(elapsed) * 0.6)).cgColor)
+            context.setLineWidth(2)
+            for index in 0 ..< 3 {
+                let y = 54 + CGFloat(index * 12)
+                context.move(to: CGPoint(x: 18, y: y))
+                context.addLine(to: CGPoint(x: 45 + CGFloat(index * 4), y: y - 3))
+            }
+            context.strokePath()
+            context.restoreGState()
+        default:
+            break
+        }
+    }
+
+    private func drawCombatFocusMark(at head: CGPoint, context: CGContext) {
+        guard case .guardStance = combatMove else { return }
+        let pulse = CGFloat((sin(time * 8) + 1) * 0.5)
+        context.setFillColor(NSColor.black.withAlphaComponent(0.35 + pulse * 0.25).cgColor)
+        context.fillEllipse(in: CGRect(x: head.x + 12, y: head.y - 11, width: 4, height: 4))
+    }
+
+    private func drawSleepMarks(context: CGContext, flip: CGFloat) {
+        guard displayedState == .sleeping || previewState == .sleeping else { return }
+        // Drawn outside the facing flip so the letters never mirror.
+        let headX = 80 + (skeleton.head.x - 80) * flip
+        let side: CGFloat = flip >= 0 ? 1 : -1
+        context.saveGState()
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        for index in 0 ..< 3 {
+            let phase = CGFloat((time * 0.42 + Double(index) / 3).truncatingRemainder(dividingBy: 1))
+            let size = 5 + phase * 5
+            let origin = CGPoint(x: headX + side * (14 + phase * 20), y: skeleton.head.y - 14 - phase * 30)
+            context.setStrokeColor(NSColor.black.withAlphaComponent(sin(phase * .pi) * 0.8).cgColor)
+            context.setLineWidth(1.8 + phase * 0.6)
+            context.move(to: origin)
+            context.addLine(to: CGPoint(x: origin.x + size, y: origin.y))
+            context.addLine(to: CGPoint(x: origin.x, y: origin.y + size))
+            context.addLine(to: CGPoint(x: origin.x + size, y: origin.y + size))
+            context.strokePath()
+        }
+        context.restoreGState()
+    }
+
+    private func drawChatHint() {
+        guard hoverAlpha > 0.01, previewState == nil else { return }
+        let scale = renderScale
+        let rect = CGRect(x: 118 * scale, y: 6 * scale, width: 32 * scale, height: 22 * scale)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 11 * scale, yRadius: 11 * scale)
+        NSColor.white.withAlphaComponent(0.94 * hoverAlpha).setFill()
+        path.fill()
+        NSColor.black.withAlphaComponent(0.7 * hoverAlpha).setStroke()
+        path.lineWidth = max(1, 1.4 * scale)
+        path.stroke()
+        NSColor.black.withAlphaComponent(0.72 * hoverAlpha).setFill()
+        for index in 0 ..< 3 {
+            NSBezierPath(ovalIn: CGRect(
+                x: (126.5 + CGFloat(index) * 6.5) * scale,
+                y: 15.5 * scale,
+                width: 3 * scale,
+                height: 3 * scale
+            )).fill()
+        }
+    }
+
+    // MARK: Input
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovering = true }
+
+    override func mouseExited(with event: NSEvent) { isHovering = false }
+
+    override func mouseDown(with event: NSEvent) {
         let screenPoint = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
 
         if mode == .sparring {
@@ -202,46 +461,141 @@ final class StickmanView: NSView {
             performCombatMove(.hit(direction: CGVector(dx: 0.7, dy: 0.25)))
             return
         }
-
-        isPerched = false
-        jumpStartedAt = time
-        dragOriginInWindow = event.locationInWindow
-        windowOriginAtDragStart = window?.frame.origin
+        if event.clickCount >= 3 {
+            pendingPoke?.cancel()
+            // Option keeps a burst of pokes from starting a fight by accident.
+            if event.modifierFlags.contains(.option) {
+                StickmanModeController.shared.beginSparringFromTripleClick()
+            }
+            return
+        }
+        if event.clickCount == 2 {
+            pendingPoke?.cancel()
+            onToggleChat?()
+            return
+        }
+        mouseDownScreenPoint = screenPoint
+        isDraggingFigure = false
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard mode == .peaceful,
-              let dragOriginInWindow,
-              let windowOriginAtDragStart,
-              let window
-        else { return }
-
-        let delta = CGPoint(
-            x: event.locationInWindow.x - dragOriginInWindow.x,
-            y: event.locationInWindow.y - dragOriginInWindow.y
-        )
-        window.setFrameOrigin(CGPoint(x: windowOriginAtDragStart.x + delta.x, y: windowOriginAtDragStart.y + delta.y))
+        guard mode == .peaceful, let start = mouseDownScreenPoint else { return }
+        let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+        if !isDraggingFigure {
+            guard hypot(point.x - start.x, point.y - start.y) > 3 else { return }
+            isDraggingFigure = true
+            pendingPoke?.cancel()
+            onDragBegan?(start)
+        }
+        onDragMoved?(point)
     }
 
     override func mouseUp(with event: NSEvent) {
-        dragOriginInWindow = nil
-        windowOriginAtDragStart = nil
+        defer {
+            mouseDownScreenPoint = nil
+            isDraggingFigure = false
+        }
+        guard mode == .peaceful, mouseDownScreenPoint != nil else { return }
+        if isDraggingFigure {
+            let point = window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+            onDragEnded?(point)
+            return
+        }
+        guard event.clickCount == 1 else { return }
+        // Wait out the double-click window so opening chat does not also trigger a poke.
+        let poke = DispatchWorkItem { [weak self] in self?.onPoke?() }
+        pendingPoke = poke
+        DispatchQueue.main.asyncAfter(deadline: .now() + NSEvent.doubleClickInterval, execute: poke)
+    }
+
+    // MARK: Controller API
+
+    func tick(dt: TimeInterval) {
+        guard previewState == nil else { return }
+        time += dt
+        let step = CGFloat(dt)
+        advanceGait(dt: step)
+        advanceFacing(dt: step)
+        advanceSwing(dt: step)
+        hoverAlpha = SMath.approach(hoverAlpha, wantsChatHint ? 1 : 0, step * 6)
+
+        if time > transientEndsAt { transientState = nil }
+        if time > taskAnimationEndsAt { taskAnimation = nil }
+        if let fidget, time - fidgetStartedAt > fidget.duration { self.fidget = nil }
+        if mode == .sparring, time > combatMoveEndsAt, !isGuarding {
+            combatMove = .guardStance
+            combatSerial += 1
+        }
+
+        let state = currentState()
+        if state != displayedState {
+            transitionFrom = blendedPose
+            transitionStartedAt = time
+            transitionDuration = Self.transitionDuration(from: displayedState, to: state)
+            displayedState = state
+        }
+
+        let target = targetPose(for: state)
+        if let from = transitionFrom {
+            let progress = CGFloat((time - transitionStartedAt) / max(0.001, transitionDuration))
+            blendedPose = from.blended(toward: target, amount: SMath.smoothstep(0, 1, progress))
+            if progress >= 1 { transitionFrom = nil }
+        } else {
+            blendedPose = target
+        }
+        skeleton = Self.solve(blendedPose)
+        needsDisplay = true
+    }
+
+    func updateMotion(_ motion: StickmanMotion, heightAboveGround: CGFloat) {
+        self.motion = motion
+        self.heightAboveGround = max(0, heightAboveGround)
+        if case .grounded = motion {} else { fidget = nil }
+        if case .held = motion { rest = .awake }
+    }
+
+    func playLanding(impact: CGFloat) {
+        landingImpact = impact
+        landingStartedAt = time
+        landingDuration = impact > 1500 ? 0.78 : 0.18 + min(0.3, Double(impact) / 3800)
+        fidget = nil
+    }
+
+    func setFacing(_ direction: CGFloat) {
+        guard abs(direction) > 0.1 else { return }
+        facingDirection = direction >= 0 ? 1 : -1
     }
 
     func setChatVisible(_ isVisible: Bool) {
         isChatVisible = isVisible
-        needsDisplay = true
+        if isVisible { rest = .awake }
     }
 
     func setActivity(_ activity: Activity) {
         self.activity = activity
-        needsDisplay = true
+    }
+
+    func setRest(_ rest: StickmanRest) {
+        self.rest = rest
+    }
+
+    var currentRest: StickmanRest { rest }
+
+    /// True when nothing scripted is playing, so the controller may start an idle behavior.
+    var isAvailableForIdleBehavior: Bool {
+        fidget == nil && taskAnimation == nil && transientState == nil && !isLanding && activity == .quiet && !isChatVisible
+    }
+
+    func playFidget(_ fidget: StickmanFidget) {
+        guard mode == .peaceful else { return }
+        rest = .awake
+        self.fidget = fidget
+        fidgetStartedAt = time
     }
 
     func showSuccessMoment() {
         transientState = .happy
         transientEndsAt = time + 1.15
-        jumpStartedAt = time
     }
 
     func showErrorMoment() {
@@ -251,81 +605,30 @@ final class StickmanView: NSView {
 
     func performTaskAnimation(_ animation: StickmanTaskAnimation) {
         guard mode == .peaceful else { return }
-        isPerched = false
+        rest = .awake
         taskAnimation = animation
         taskAnimationStartedAt = time
-        let duration: TimeInterval
-        switch animation {
-        case .spawnAgent: duration = 1.55
-        case .openBrowserTab: duration = 1.4
-        case .checkCalendar: duration = 1.35
-        case .requestPermission: duration = 1.45
-        case .connectService: duration = 1.5
-        }
-        taskAnimationEndsAt = time + duration
-        needsDisplay = true
-    }
-
-    func setPreviewState(_ previewState: PreviewState, time: TimeInterval) {
-        self.previewState = previewState
-        previewTime = time
-        self.time = time
-        mode = [.sparring, .punch, .kick].contains(previewState) ? .sparring : .peaceful
-        isPerched = previewState == .perched
-        locomotionIntensity = previewState == .walking ? 0.9 : 0
-        navigationGripPoint = previewState == .reaching ? CGPoint(x: 138, y: 45) : nil
-        showsChatHint = false
-        if previewState == .punch {
-            let duration = 0.72
-            combatMove = .jab
-            combatMoveStartedAt = floor(time / duration) * duration
-            combatMoveEndsAt = combatMoveStartedAt + duration
-        }
-        if previewState == .kick {
-            let duration = 0.9
-            combatMove = .kick
-            combatMoveStartedAt = floor(time / duration) * duration
-            combatMoveEndsAt = combatMoveStartedAt + duration
-        }
-        pose = targetPose()
-        needsDisplay = true
-    }
-
-    func setLocomotion(intensity: CGFloat, facingDirection: CGFloat) {
-        locomotionIntensity = max(0, min(1, intensity))
-        if abs(facingDirection) > 0.1 { self.facingDirection = facingDirection >= 0 ? 1 : -1 }
-    }
-
-    func setNavigationGrip(_ point: CGPoint?) {
-        navigationGripPoint = point
-    }
-
-    func setPerched(_ perched: Bool) {
-        isPerched = perched
-        if perched {
-            locomotionIntensity = 0
-            navigationGripPoint = nil
-        }
-        needsDisplay = true
+        taskAnimationEndsAt = time + Self.taskDuration(animation)
     }
 
     func setMode(_ mode: StickmanMode) {
         self.mode = mode
         if mode == .sparring {
-            isPerched = false
+            rest = .awake
             isChatVisible = false
+            fidget = nil
             performCombatMove(.guardStance)
         } else {
             combatMove = .guardStance
             transientState = .happy
             transientEndsAt = time + 0.8
         }
-        needsDisplay = true
     }
 
     func performCombatMove(_ move: StickmanCombatMove) {
         combatMove = move
         combatMoveStartedAt = time
+        combatSerial += 1
         let duration: TimeInterval
         switch move {
         case .guardStance: duration = 0.3
@@ -338,7 +641,6 @@ final class StickmanView: NSView {
         case .victory: duration = 1.15
         }
         combatMoveEndsAt = time + duration
-        needsDisplay = true
     }
 
     @objc private func modeDidChange(_ notification: Notification) {
@@ -347,56 +649,109 @@ final class StickmanView: NSView {
         setMode(newMode)
     }
 
-    private func startAnimation() {
-        displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if previewTime == nil { time += 1.0 / 60.0 }
-            if let jumpStartedAt, time - jumpStartedAt > 0.72 { self.jumpStartedAt = nil }
-            if time > transientEndsAt { transientState = nil }
-            if time > taskAnimationEndsAt { taskAnimation = nil }
-            if mode == .sparring, time > combatMoveEndsAt { combatMove = .guardStance }
-            pose = pose.blended(toward: targetPose(), amount: mode == .sparring ? 0.32 : 0.2)
-            needsDisplay = true
+    // MARK: Preview rendering
+
+    func setPreviewState(_ previewState: PreviewState, time: TimeInterval) {
+        self.previewState = previewState
+        self.time = time
+        mode = [.sparring, .punch, .kick].contains(previewState) ? .sparring : .peaceful
+        motion = .grounded(velocityX: 0)
+        heightAboveGround = 0
+        rest = .awake
+        activity = .quiet
+        fidget = nil
+        taskAnimation = nil
+        transientState = nil
+        landingStartedAt = -10
+        runBlend = 0
+        strideLength = Self.walkStride
+        facingScale = 1
+
+        switch previewState {
+        case .walking, .running:
+            let speed: CGFloat = previewState == .walking ? 92 : 245
+            motion = .grounded(velocityX: speed)
+            isWalking = true
+            runBlend = SMath.smoothstep(130, 220, speed)
+            strideLength = SMath.mix(Self.walkStride, Self.runStride, runBlend)
+            gaitPhase = CGFloat(time) * (speed / renderScale) / (2 * strideLength)
+            gaitPhase -= floor(gaitPhase)
+        case .crouching:
+            motion = .crouching(progress: CGFloat(time.truncatingRemainder(dividingBy: 0.5) / 0.5))
+        case .jumping:
+            let t = CGFloat(time.truncatingRemainder(dividingBy: 0.9) / 0.9)
+            motion = .airborne(velocity: CGVector(dx: 180, dy: 900 - t * 1800), planned: true)
+            heightAboveGround = 60
+        case .falling:
+            motion = .airborne(velocity: CGVector(dx: 40, dy: -1500), planned: false)
+            heightAboveGround = 200
+        case .landing:
+            landingImpact = 1100
+            landingDuration = 0.18 + min(0.3, Double(landingImpact) / 3800)
+            landingStartedAt = floor(time / 0.6) * 0.6
+        case .held:
+            motion = .held(velocity: CGVector(dx: CGFloat(sin(time * 3)) * 600, dy: 0))
+            swingAngle = CGFloat(sin(time * 3 - 0.8)) * -0.35
+            heightAboveGround = 120
+        case .listening: activity = .listening
+        case .thinking: activity = .thinking
+        case .speaking: activity = .speaking
+        case .working: activity = .working
+        case .happy: transientState = .happy; transientEndsAt = .infinity
+        case .error: transientState = .error; transientEndsAt = .infinity
+        case .agentWave, .browserWand, .calendarPeek, .permissionKey, .connectorLink:
+            let animation = Self.taskAnimation(for: previewState) ?? .spawnAgent
+            let duration = Self.taskDuration(animation)
+            taskAnimation = animation
+            taskAnimationStartedAt = floor(time / duration) * duration
+            taskAnimationEndsAt = .infinity
+        case .stretching:
+            fidget = .stretch
+            fidgetStartedAt = floor(time / StickmanFidget.stretch.duration) * StickmanFidget.stretch.duration
+        case .perched: rest = .sitting
+        case .sleeping: rest = .sleeping
+        case .punch, .kick:
+            let duration = previewState == .punch ? 0.72 : 0.9
+            combatMove = previewState == .punch ? .jab : .kick
+            combatMoveStartedAt = floor(time / duration) * duration
+            combatMoveEndsAt = combatMoveStartedAt + duration
+        case .idle, .sparring:
+            break
         }
-        if let displayTimer { RunLoop.main.add(displayTimer, forMode: .common) }
+
+        let state = currentState()
+        displayedState = state
+        transitionFrom = nil
+        blendedPose = targetPose(for: state)
+        skeleton = Self.solve(blendedPose)
+        needsDisplay = true
+    }
+
+    // MARK: State selection
+
+    private var isLanding: Bool { time - landingStartedAt < landingDuration }
+
+    private var isGuarding: Bool {
+        if case .guardStance = combatMove { return true }
+        return false
+    }
+
+    private var wantsChatHint: Bool {
+        isHovering && !isChatVisible && mode == .peaceful && !isDraggingFigure
     }
 
     private func currentState() -> StickmanState {
-        if let previewState {
-            switch previewState {
-            case .idle: return .idle
-            case .listening: return .listening
-            case .thinking: return .thinking
-            case .walking: return .walking
-            case .reaching: return .reaching
-            case .happy: return .happy
-            case .speaking: return .speaking
-            case .working: return .working
-            case .agentWave: return .agentWave
-            case .browserWand: return .browserWand
-            case .calendarPeek: return .calendarPeek
-            case .permissionKey: return .permissionKey
-            case .connectorLink: return .connectorLink
-            case .error: return .error
-            case .sleeping: return .sleeping
-            case .perched: return .perched
-            case .sparring, .punch, .kick: return .combat
-            }
+        switch motion {
+        case .held: return .held
+        case .airborne: return .airborne
+        case .crouching: return .crouching
+        case .grounded: break
         }
-        if mode == .sparring { return .combat }
-        if isPerched { return .perched }
-        if let taskAnimation {
-            switch taskAnimation {
-            case .spawnAgent: return .agentWave
-            case .openBrowserTab: return .browserWand
-            case .checkCalendar: return .calendarPeek
-            case .requestPermission: return .permissionKey
-            case .connectService: return .connectorLink
-            }
-        }
+        if isLanding { return .landing }
+        if mode == .sparring { return .combat(serial: combatSerial) }
+        if let taskAnimation { return Self.state(for: taskAnimation) }
         if let transientState { return transientState }
-        if navigationGripPoint != nil { return .reaching }
-        if locomotionIntensity > 0.08 { return .walking }
+        if isWalking { return .locomotion }
         switch activity {
         case .listening: return .listening
         case .thinking: return .thinking
@@ -407,41 +762,131 @@ final class StickmanView: NSView {
         case .quiet: break
         }
         if isChatVisible { return .listening }
-        let cycle = time.truncatingRemainder(dividingBy: 38)
-        if cycle > 12, cycle < 14 { return .thinking }
-        if cycle > 25, cycle < 29 { return .sleeping }
-        return .idle
+        if let fidget { return .fidget(fidget) }
+        switch rest {
+        case .sitting: return .sitting
+        case .sleeping: return .sleeping
+        case .awake: return .idle
+        }
     }
 
-    private func targetPose() -> StickPose {
-        let state = currentState()
-        var result: StickPose
-        switch state {
-        case .idle: result = idlePose()
-        case .listening: result = listeningPose()
-        case .thinking: result = thinkingPose()
-        case .walking: result = walkingPose()
-        case .reaching: result = reachingPose()
-        case .happy: result = happyPose()
-        case .speaking: result = speakingPose()
-        case .working: result = workingPose()
-        case .agentWave: result = agentWavePose()
-        case .browserWand: result = browserWandPose()
-        case .calendarPeek: result = calendarPeekPose()
-        case .permissionKey: result = permissionKeyPose()
-        case .connectorLink: result = connectorLinkPose()
-        case .error: result = errorPose()
-        case .sleeping: result = sleepingPose()
-        case .perched: result = perchedPose()
-        case .combat: result = combatPose()
+    private static func transitionDuration(from: StickmanState, to: StickmanState) -> TimeInterval {
+        switch (from, to) {
+        case (_, .landing), (.crouching, .airborne): return 0.05
+        case (.combat, .combat): return 0.07
+        case (_, .held), (_, .crouching): return 0.12
+        case (.airborne, _), (.held, _): return 0.1
+        case (_, .sleeping), (.sleeping, _): return 0.8
+        case (_, .sitting), (.sitting, _): return 0.45
+        case (_, .locomotion), (.locomotion, _): return 0.18
+        default: return 0.24
         }
+    }
 
-        if let jumpStartedAt {
-            let progress = max(0, min(1, (time - jumpStartedAt) / 0.72))
-            let lift = CGFloat(sin(progress * .pi)) * -28
-            result = result.offsetBy(dx: 0, dy: lift)
+    private static func state(for animation: StickmanTaskAnimation) -> StickmanState {
+        switch animation {
+        case .spawnAgent: return .agentWave
+        case .openBrowserTab: return .browserWand
+        case .checkCalendar: return .calendarPeek
+        case .requestPermission: return .permissionKey
+        case .connectService: return .connectorLink
         }
-        return result
+    }
+
+    private static func taskAnimation(for preview: PreviewState) -> StickmanTaskAnimation? {
+        switch preview {
+        case .agentWave: return .spawnAgent
+        case .browserWand: return .openBrowserTab
+        case .calendarPeek: return .checkCalendar
+        case .permissionKey: return .requestPermission
+        case .connectorLink: return .connectService
+        default: return nil
+        }
+    }
+
+    private static func taskDuration(_ animation: StickmanTaskAnimation) -> TimeInterval {
+        switch animation {
+        case .spawnAgent: return 1.55
+        case .openBrowserTab: return 1.4
+        case .checkCalendar: return 1.35
+        case .requestPermission: return 1.45
+        case .connectService: return 1.5
+        }
+    }
+
+    // MARK: Per-frame dynamics
+
+    private var groundVelocityX: CGFloat {
+        if case .grounded(let velocity) = motion { return velocity }
+        return 0
+    }
+
+    private func advanceGait(dt: CGFloat) {
+        let velocity = groundVelocityX
+        let speed = abs(velocity)
+        if isWalking { isWalking = speed > 4 } else { isWalking = speed > 10 }
+
+        let acceleration = (velocity - lastGroundVelocity) / max(dt, 0.001)
+        lastGroundVelocity = velocity
+        let towardFacing = acceleration * facingDirection
+        smoothedAcceleration += (towardFacing - smoothedAcceleration) * min(1, dt * 8)
+
+        runBlend = SMath.smoothstep(130, 220, speed)
+        let walkReference: CGFloat = 92
+        let baseStride = SMath.mix(Self.walkStride, Self.runStride, runBlend)
+        strideLength = baseStride * min(1, max(0.45, 0.45 + 0.55 * speed / walkReference))
+        // Phase advances with distance travelled, so planted feet never slide.
+        gaitPhase += (speed / renderScale) * dt / (2 * strideLength)
+        gaitPhase -= floor(gaitPhase)
+    }
+
+    private func advanceFacing(dt: CGFloat) {
+        var target = facingDirection
+        if let fidget, fidget == .lookAround {
+            let progress = (time - fidgetStartedAt) / fidget.duration
+            if progress > 0.38, progress < 0.78 { target = -facingDirection }
+        }
+        facingScale = SMath.approach(facingScale, target, dt * 11)
+    }
+
+    private func advanceSwing(dt: CGFloat) {
+        // Pendulum: the body trails behind the direction the cursor drags it.
+        var targetAngle: CGFloat = 0
+        if case .held(let velocity) = motion {
+            targetAngle = max(-0.6, min(0.6, -velocity.dx * 0.00055)) * (facingScale >= 0 ? 1 : -1)
+        }
+        let stiffness: CGFloat = 70
+        let damping: CGFloat = 7
+        swingVelocity += ((targetAngle - swingAngle) * stiffness - swingVelocity * damping) * dt
+        swingAngle += swingVelocity * dt
+    }
+
+    // MARK: Poses
+
+    private func targetPose(for state: StickmanState) -> StickPose {
+        switch state {
+        case .idle: return idlePose()
+        case .listening: return listeningPose()
+        case .thinking: return thinkingPose()
+        case .locomotion: return gaitPose()
+        case .happy: return happyPose()
+        case .speaking: return speakingPose()
+        case .working: return workingPose()
+        case .agentWave: return agentWavePose()
+        case .browserWand: return browserWandPose()
+        case .calendarPeek: return calendarPeekPose()
+        case .permissionKey: return permissionKeyPose()
+        case .connectorLink: return connectorLinkPose()
+        case .error: return errorPose()
+        case .sitting: return sittingPose()
+        case .sleeping: return sleepingPose()
+        case .combat: return combatPose()
+        case .crouching: return crouchPose()
+        case .airborne: return airbornePose()
+        case .landing: return landingPose()
+        case .held: return heldPose()
+        case .fidget(let fidget): return fidgetPose(fidget)
+        }
     }
 
     private static func neutralPose() -> StickPose {
@@ -449,79 +894,302 @@ final class StickmanView: NSView {
             head: CGPoint(x: 80, y: 26), neck: CGPoint(x: 80, y: 48), hip: CGPoint(x: 80, y: 92),
             leftElbow: CGPoint(x: 65, y: 67), leftHand: CGPoint(x: 60, y: 90),
             rightElbow: CGPoint(x: 95, y: 67), rightHand: CGPoint(x: 100, y: 90),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 58, y: 145),
-            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 103, y: 145)
+            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 59, y: 145),
+            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 102, y: 145)
         )
     }
 
     private func idlePose() -> StickPose {
         let breath = CGFloat(sin(time * 1.7))
+        let shift = CGFloat(sin(time * 0.55))
         let sway = CGFloat(sin(time * 0.82))
         return StickPose(
-            head: CGPoint(x: 79 + sway * 1.3, y: 27 + breath * 0.7),
-            neck: CGPoint(x: 80, y: 49 + breath * 0.5), hip: CGPoint(x: 81, y: 93),
-            leftElbow: CGPoint(x: 65, y: 70 + breath), leftHand: CGPoint(x: 59, y: 94 + breath),
-            rightElbow: CGPoint(x: 96, y: 68 - breath * 0.3), rightHand: CGPoint(x: 102, y: 91),
-            leftKnee: CGPoint(x: 69, y: 119), leftFoot: CGPoint(x: 58, y: 145),
-            rightKnee: CGPoint(x: 92, y: 118), rightFoot: CGPoint(x: 104, y: 145),
-            headTilt: sway * 0.035, bodyLean: sway * 0.012
+            head: CGPoint(x: 80 + shift * 1.6 + sway * 0.8, y: 26 + breath * 0.7),
+            neck: CGPoint(x: 80 + shift * 1.6, y: 48 + breath * 0.5),
+            hip: CGPoint(x: 80 + shift * 2.4, y: 92 + abs(shift) * 0.7),
+            leftElbow: CGPoint(x: 65 + shift, y: 69 + breath), leftHand: CGPoint(x: 60 + shift * 1.4, y: 92 + breath),
+            rightElbow: CGPoint(x: 96 + shift, y: 68 - breath * 0.3), rightHand: CGPoint(x: 101 + shift * 1.4, y: 91),
+            leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 59, y: 145),
+            rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 102, y: 145),
+            headTilt: sway * 0.05, bodyLean: shift * 0.02
         )
+    }
+
+    private func gaitPose() -> StickPose {
+        let run = runBlend
+        let speedDesign = abs(groundVelocityX) / renderScale
+        let amplitude = min(1, speedDesign / 40)
+        let stanceFraction = 0.5 - 0.14 * run
+        let travel = 2 * strideLength * stanceFraction
+        let lift = (9 + 7 * run) * amplitude
+
+        func foot(_ phase: CGFloat) -> (offset: CGFloat, lift: CGFloat) {
+            let p = phase - floor(phase)
+            if p < stanceFraction {
+                let t = p / stanceFraction
+                return (travel / 2 - travel * t, 0)
+            }
+            let t = (p - stanceFraction) / (1 - stanceFraction)
+            let eased = t * t * (3 - 2 * t)
+            return (-travel / 2 + travel * eased, sin(t * .pi) * lift)
+        }
+
+        let left = foot(gaitPhase)
+        let right = foot(gaitPhase + 0.5)
+        let walkBob = cos(gaitPhase * 4 * .pi) * 2
+        let runBob = cos((gaitPhase - stanceFraction / 2) * 4 * .pi) * 2.5
+        let bob = (walkBob * (1 - run) + runBob * run) * amplitude
+        let hipX: CGFloat = 80
+        let hipY = 90 + 2 * run + bob
+        let accelerationLean = max(-0.08, min(0.08, smoothedAcceleration * 0.00012))
+        let lean = (0.05 + 0.17 * run) * amplitude + accelerationLean
+        let neck = CGPoint(x: hipX, y: hipY - Bone.torso)
+        let head = CGPoint(x: hipX + 1 + 2 * run, y: neck.y - Bone.neck)
+
+        func footPoint(_ f: (offset: CGFloat, lift: CGFloat)) -> CGPoint {
+            CGPoint(x: hipX + f.offset, y: Bone.ground - f.lift)
+        }
+        func kneeHint(_ foot: CGPoint) -> CGPoint {
+            CGPoint(x: max(foot.x, hipX) + 12, y: (hipY + foot.y) / 2)
+        }
+        func arm(oppositeOf offset: CGFloat) -> (hand: CGPoint, elbow: CGPoint) {
+            let swing = -offset * amplitude
+            let walkHand = CGPoint(x: neck.x + swing * 0.8, y: neck.y + 44.5 - abs(swing) * 0.12)
+            let walkElbow = CGPoint(x: neck.x + swing * 0.3 - 5, y: neck.y + 22)
+            let runHand = CGPoint(x: neck.x + 6 + swing * 0.75, y: neck.y + 30 - swing * 0.3)
+            let runElbow = CGPoint(x: neck.x - 16 + swing * 0.3, y: neck.y + 20)
+            return (SMath.mix(walkHand, runHand, run), SMath.mix(walkElbow, runElbow, run))
+        }
+
+        let leftFoot = footPoint(left)
+        let rightFoot = footPoint(right)
+        let leftArm = arm(oppositeOf: left.offset)
+        let rightArm = arm(oppositeOf: right.offset)
+        return StickPose(
+            head: head, neck: neck, hip: CGPoint(x: hipX, y: hipY),
+            leftElbow: leftArm.elbow, leftHand: leftArm.hand,
+            rightElbow: rightArm.elbow, rightHand: rightArm.hand,
+            leftKnee: kneeHint(leftFoot), leftFoot: leftFoot,
+            rightKnee: kneeHint(rightFoot), rightFoot: rightFoot,
+            headTilt: 0.06 * run, bodyLean: lean
+        )
+    }
+
+    private func crouchPose() -> StickPose {
+        var progress: CGFloat = 1
+        if case .crouching(let value) = motion { progress = value }
+        let p = SMath.easeOutCubic(progress)
+        let depth = 15 * p
+        return StickPose(
+            head: CGPoint(x: 81 + 4 * p, y: 26 + depth + 2 * p),
+            neck: CGPoint(x: 80 + 3 * p, y: 48 + depth + 2 * p),
+            hip: CGPoint(x: 79, y: 92 + depth),
+            leftElbow: CGPoint(x: 64 - 4 * p, y: 69 + depth), leftHand: CGPoint(x: 60 - 12 * p, y: 92 + depth * 0.4),
+            rightElbow: CGPoint(x: 92 - 10 * p, y: 69 + depth), rightHand: CGPoint(x: 98 - 26 * p, y: 92 + depth * 0.5),
+            leftKnee: CGPoint(x: 64, y: 122), leftFoot: CGPoint(x: 60, y: 145),
+            rightKnee: CGPoint(x: 98, y: 122), rightFoot: CGPoint(x: 100, y: 145),
+            headTilt: 0.12 * p, bodyLean: 0.16 * p
+        )
+    }
+
+    private func airbornePose() -> StickPose {
+        var velocity = CGVector.zero
+        var planned = true
+        if case .airborne(let v, let isPlanned) = motion {
+            velocity = v
+            planned = isPlanned
+        }
+        let rising = SMath.smoothstep(-380, 380, velocity.dy)
+        let leap = SMath.smoothstep(90, 240, abs(velocity.dx))
+        let flail = planned ? 0 : SMath.smoothstep(-650, -1250, velocity.dy)
+
+        let tuck = StickPose(
+            head: CGPoint(x: 80, y: 24), neck: CGPoint(x: 80, y: 46), hip: CGPoint(x: 80, y: 88),
+            leftElbow: CGPoint(x: 60, y: 30), leftHand: CGPoint(x: 50, y: 4),
+            rightElbow: CGPoint(x: 100, y: 28), rightHand: CGPoint(x: 110, y: 2),
+            leftKnee: CGPoint(x: 64, y: 106), leftFoot: CGPoint(x: 72, y: 128),
+            rightKnee: CGPoint(x: 99, y: 104), rightFoot: CGPoint(x: 90, y: 126)
+        )
+        let stride = StickPose(
+            head: CGPoint(x: 85, y: 26), neck: CGPoint(x: 82, y: 48), hip: CGPoint(x: 79, y: 90),
+            leftElbow: CGPoint(x: 64, y: 62), leftHand: CGPoint(x: 52, y: 78),
+            rightElbow: CGPoint(x: 98, y: 54), rightHand: CGPoint(x: 110, y: 44),
+            leftKnee: CGPoint(x: 70, y: 118), leftFoot: CGPoint(x: 50, y: 132),
+            rightKnee: CGPoint(x: 102, y: 102), rightFoot: CGPoint(x: 106, y: 128),
+            headTilt: 0.08, bodyLean: 0.12
+        )
+        let reach = StickPose(
+            head: CGPoint(x: 80, y: 26), neck: CGPoint(x: 80, y: 48), hip: CGPoint(x: 80, y: 92),
+            leftElbow: CGPoint(x: 62, y: 52), leftHand: CGPoint(x: 45, y: 56),
+            rightElbow: CGPoint(x: 98, y: 52), rightHand: CGPoint(x: 115, y: 56),
+            leftKnee: CGPoint(x: 68, y: 118), leftFoot: CGPoint(x: 66, y: 144),
+            rightKnee: CGPoint(x: 94, y: 118), rightFoot: CGPoint(x: 95, y: 143)
+        )
+        var pose = reach.blended(toward: tuck.blended(toward: stride, amount: leap), amount: rising)
+        if flail > 0 {
+            let wave = CGFloat(time * 14)
+            let pedal = CGFloat(time * 12)
+            let flailing = StickPose(
+                head: CGPoint(x: 80, y: 26), neck: CGPoint(x: 80, y: 48), hip: CGPoint(x: 80, y: 91),
+                leftElbow: CGPoint(x: 58, y: 34), leftHand: CGPoint(x: 46 + sin(wave) * 10, y: 8 + cos(wave) * 6),
+                rightElbow: CGPoint(x: 102, y: 32), rightHand: CGPoint(x: 114 - sin(wave + 1) * 10, y: 6 + cos(wave + 1) * 6),
+                leftKnee: CGPoint(x: 62, y: 112), leftFoot: CGPoint(x: 70 + sin(pedal) * 10, y: 134 + cos(pedal) * 7),
+                rightKnee: CGPoint(x: 98, y: 112), rightFoot: CGPoint(x: 90 - sin(pedal) * 10, y: 134 - cos(pedal) * 7)
+            )
+            pose = pose.blended(toward: flailing, amount: flail)
+        }
+        return pose
+    }
+
+    private func landingPose() -> StickPose {
+        let progress = CGFloat((time - landingStartedAt) / max(0.01, landingDuration))
+        if landingImpact > 1500 {
+            // Superhero landing: one knee down, a fist on the ground, then stand up.
+            let kneel = StickPose(
+                head: CGPoint(x: 116, y: 84), neck: CGPoint(x: 104, y: 98), hip: CGPoint(x: 74, y: 125),
+                leftElbow: CGPoint(x: 78, y: 86), leftHand: CGPoint(x: 52, y: 84),
+                rightElbow: CGPoint(x: 116, y: 120), rightHand: CGPoint(x: 110, y: 145),
+                leftKnee: CGPoint(x: 60, y: 150), leftFoot: CGPoint(x: 44, y: 145),
+                rightKnee: CGPoint(x: 96, y: 108), rightFoot: CGPoint(x: 102, y: 145)
+            )
+            let recover = SMath.smoothstep(0.55, 1, progress)
+            return kneel.blended(toward: idlePose(), amount: recover)
+        }
+        let depth = min(24, 6 + landingImpact * 0.012) * (1 - SMath.easeOutCubic(progress))
+        return StickPose(
+            head: CGPoint(x: 80 + depth * 0.25, y: 26 + depth * 1.08),
+            neck: CGPoint(x: 80 + depth * 0.15, y: 48 + depth * 1.05),
+            hip: CGPoint(x: 80, y: 92 + depth),
+            leftElbow: CGPoint(x: 62, y: 66 + depth), leftHand: CGPoint(x: 52 - depth * 0.4, y: 86 + depth * 0.6),
+            rightElbow: CGPoint(x: 98, y: 66 + depth), rightHand: CGPoint(x: 108 + depth * 0.4, y: 86 + depth * 0.6),
+            leftKnee: CGPoint(x: 62, y: 121), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 98, y: 121), rightFoot: CGPoint(x: 102, y: 145),
+            headTilt: 0.1 * depth / 24, bodyLean: 0.12 * depth / 24
+        )
+    }
+
+    private func heldPose() -> StickPose {
+        let kick = CGFloat(sin(time * 9.5))
+        let fidgetArms = CGFloat(sin(time * 4.2))
+        return StickPose(
+            head: CGPoint(x: 80, y: 22), neck: CGPoint(x: 80, y: 44), hip: CGPoint(x: 80, y: 88),
+            leftElbow: CGPoint(x: 64, y: 64), leftHand: CGPoint(x: 66 + fidgetArms * 2, y: 86 + kick * 1.5),
+            rightElbow: CGPoint(x: 97, y: 63), rightHand: CGPoint(x: 94 - fidgetArms * 2, y: 85 - kick * 1.5),
+            leftKnee: CGPoint(x: 72, y: 114), leftFoot: CGPoint(x: 73 + kick * 3, y: 140 - max(0, kick) * 6),
+            rightKnee: CGPoint(x: 92, y: 114), rightFoot: CGPoint(x: 88 - kick * 3, y: 140 - max(0, -kick) * 6),
+            hangSwing: swingAngle
+        )
+    }
+
+    private func sittingPose() -> StickPose {
+        let breath = CGFloat(sin(time * 1.45)) * 0.6
+        return StickPose(
+            head: CGPoint(x: 79, y: 60 + breath), neck: CGPoint(x: 80, y: 82 + breath), hip: CGPoint(x: 80, y: 126),
+            leftElbow: CGPoint(x: 58, y: 104), leftHand: CGPoint(x: 50, y: 132),
+            rightElbow: CGPoint(x: 102, y: 104), rightHand: CGPoint(x: 110, y: 132),
+            leftKnee: CGPoint(x: 50, y: 136), leftFoot: CGPoint(x: 86, y: 143),
+            rightKnee: CGPoint(x: 110, y: 136), rightFoot: CGPoint(x: 74, y: 143),
+            headTilt: -0.04
+        )
+    }
+
+    private func sleepingPose() -> StickPose {
+        let breath = CGFloat(sin(time * 1.1))
+        return StickPose(
+            head: CGPoint(x: 92, y: 72 + breath * 1.2), neck: CGPoint(x: 82, y: 84 + breath * 0.8), hip: CGPoint(x: 80, y: 127),
+            leftElbow: CGPoint(x: 60, y: 108), leftHand: CGPoint(x: 56, y: 134),
+            rightElbow: CGPoint(x: 100, y: 108), rightHand: CGPoint(x: 104, y: 134),
+            leftKnee: CGPoint(x: 50, y: 136), leftFoot: CGPoint(x: 86, y: 143),
+            rightKnee: CGPoint(x: 110, y: 136), rightFoot: CGPoint(x: 74, y: 143),
+            headTilt: 0.9, bodyLean: 0.12
+        )
+    }
+
+    private func fidgetPose(_ fidget: StickmanFidget) -> StickPose {
+        let elapsed = time - fidgetStartedAt
+        let progress = CGFloat(elapsed / fidget.duration)
+        let envelope = SMath.smoothstep(0, 0.18, progress) * (1 - SMath.smoothstep(0.82, 1, progress))
+        let base = idlePose()
+        switch fidget {
+        case .stretch:
+            let reach = SMath.smoothstep(0.05, 0.38, progress) * (1 - SMath.smoothstep(0.72, 0.98, progress))
+            let bend = CGFloat(sin(Double(progress) * .pi * 2)) * SMath.smoothstep(0.35, 0.5, progress) * (1 - SMath.smoothstep(0.62, 0.75, progress))
+            let stretch = StickPose(
+                head: CGPoint(x: 80, y: 23), neck: CGPoint(x: 80, y: 45), hip: CGPoint(x: 80, y: 89),
+                leftElbow: CGPoint(x: 64, y: 22), leftHand: CGPoint(x: 75, y: 2),
+                rightElbow: CGPoint(x: 96, y: 22), rightHand: CGPoint(x: 85, y: 2),
+                leftKnee: CGPoint(x: 68, y: 118), leftFoot: CGPoint(x: 62, y: 145),
+                rightKnee: CGPoint(x: 92, y: 118), rightFoot: CGPoint(x: 98, y: 145),
+                headTilt: -0.12, bodyLean: bend * 0.12
+            )
+            return base.blended(toward: stretch, amount: reach)
+        case .tapFoot:
+            let tap = max(0, CGFloat(sin(elapsed * 15)))
+            let impatient = StickPose(
+                head: CGPoint(x: 80 + CGFloat(sin(elapsed * 2.6)) * 1.5, y: 26), neck: CGPoint(x: 80, y: 48), hip: CGPoint(x: 79, y: 92),
+                leftElbow: CGPoint(x: 56, y: 70), leftHand: CGPoint(x: 70, y: 88),
+                rightElbow: CGPoint(x: 104, y: 70), rightHand: CGPoint(x: 90, y: 88),
+                leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 60, y: 145),
+                rightKnee: CGPoint(x: 96, y: 117), rightFoot: CGPoint(x: 103, y: 145 - tap * 5),
+                headTilt: CGFloat(sin(elapsed * 2.6)) * 0.08
+            )
+            return base.blended(toward: impatient, amount: envelope)
+        case .lookAround:
+            let glance = CGFloat(sin(Double(progress) * .pi * 2))
+            let shading = SMath.smoothstep(0.15, 0.3, progress) * (1 - SMath.smoothstep(0.85, 0.95, progress))
+            var look = base
+            look.head.x += 3 + glance * 2
+            look.headTilt = 0.1 + glance * 0.06
+            look.rightElbow = CGPoint(x: 100, y: 42)
+            look.rightHand = CGPoint(x: 90, y: 22)
+            look.bodyLean = 0.04
+            return base.blended(toward: look, amount: shading)
+        case .wave:
+            let wave = CGFloat(sin(elapsed * 15))
+            let waving = StickPose(
+                head: CGPoint(x: 79, y: 25), neck: CGPoint(x: 80, y: 48), hip: CGPoint(x: 80, y: 92),
+                leftElbow: CGPoint(x: 64, y: 69), leftHand: CGPoint(x: 59, y: 92),
+                rightElbow: CGPoint(x: 101, y: 46), rightHand: CGPoint(x: 108 + wave * 7, y: 22 - abs(wave) * 2),
+                leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 59, y: 145),
+                rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 102, y: 145),
+                headTilt: -0.08, bodyLean: -0.03
+            )
+            return base.blended(toward: waving, amount: envelope)
+        }
     }
 
     private func listeningPose() -> StickPose {
         let pulse = CGFloat(sin(time * 3.4))
         return StickPose(
             head: CGPoint(x: 78, y: 24 + pulse), neck: CGPoint(x: 80, y: 47), hip: CGPoint(x: 81, y: 92),
-            leftElbow: CGPoint(x: 62, y: 67), leftHand: CGPoint(x: 54, y: 86),
-            rightElbow: CGPoint(x: 99, y: 62), rightHand: CGPoint(x: 105, y: 40),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 57, y: 145),
-            rightKnee: CGPoint(x: 93, y: 118), rightFoot: CGPoint(x: 104, y: 145),
+            leftElbow: CGPoint(x: 62, y: 67), leftHand: CGPoint(x: 55, y: 88),
+            rightElbow: CGPoint(x: 99, y: 62), rightHand: CGPoint(x: 103, y: 40),
+            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 93, y: 118), rightFoot: CGPoint(x: 103, y: 145),
             headTilt: -0.1
         )
     }
 
     private func thinkingPose() -> StickPose {
+        let tap = CGFloat(sin(time * 2.2))
         return StickPose(
-            head: CGPoint(x: 76, y: 27), neck: CGPoint(x: 79, y: 49), hip: CGPoint(x: 83, y: 93),
-            leftElbow: CGPoint(x: 61, y: 73), leftHand: CGPoint(x: 62, y: 96),
-            rightElbow: CGPoint(x: 100, y: 69), rightHand: CGPoint(x: 91, y: 48),
-            leftKnee: CGPoint(x: 69, y: 119), leftFoot: CGPoint(x: 56, y: 145),
-            rightKnee: CGPoint(x: 94, y: 120), rightFoot: CGPoint(x: 105, y: 145),
+            head: CGPoint(x: 76, y: 27), neck: CGPoint(x: 79, y: 49), hip: CGPoint(x: 82, y: 93),
+            leftElbow: CGPoint(x: 61, y: 73), leftHand: CGPoint(x: 64, y: 96),
+            rightElbow: CGPoint(x: 100, y: 69), rightHand: CGPoint(x: 90, y: 47 + tap),
+            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 94, y: 120), rightFoot: CGPoint(x: 103, y: 145),
             headTilt: -0.11, bodyLean: 0.045
         )
-    }
-
-    private func walkingPose() -> StickPose {
-        let phase = CGFloat(sin(time * 10.2))
-        let bob = abs(CGFloat(sin(time * 10.2))) * -4 * locomotionIntensity
-        return StickPose(
-            head: CGPoint(x: 81, y: 27 + bob), neck: CGPoint(x: 80, y: 49 + bob), hip: CGPoint(x: 79, y: 91 + bob),
-            leftElbow: CGPoint(x: 66 + phase * 8, y: 68 + bob), leftHand: CGPoint(x: 60 + phase * 15, y: 91 + bob),
-            rightElbow: CGPoint(x: 95 - phase * 8, y: 68 + bob), rightHand: CGPoint(x: 101 - phase * 15, y: 91 + bob),
-            leftKnee: CGPoint(x: 70 - phase * 11, y: 117 + bob), leftFoot: CGPoint(x: 58 - phase * 17, y: 143 + bob),
-            rightKnee: CGPoint(x: 91 + phase * 11, y: 117 + bob), rightFoot: CGPoint(x: 103 + phase * 17, y: 143 + bob),
-            bodyLean: 0.08
-        )
-    }
-
-    private func reachingPose() -> StickPose {
-        var result = idlePose()
-        guard let target = navigationGripPoint else { return result }
-        let local = CGPoint(x: min(150, max(10, target.x)), y: min(150, max(10, target.y)))
-        result.rightElbow = CGPoint(x: (result.neck.x + local.x) * 0.52, y: (result.neck.y + local.y) * 0.52 - 7)
-        result.rightHand = local
-        result.bodyLean = local.x >= 80 ? 0.12 : -0.12
-        return result
     }
 
     private func happyPose() -> StickPose {
         let energy = CGFloat(sin(time * 12)) * 2
         return StickPose(
-            head: CGPoint(x: 80, y: 24 + energy), neck: CGPoint(x: 80, y: 47), hip: CGPoint(x: 80, y: 88),
-            leftElbow: CGPoint(x: 58, y: 57), leftHand: CGPoint(x: 43, y: 34),
-            rightElbow: CGPoint(x: 102, y: 57), rightHand: CGPoint(x: 117, y: 34),
-            leftKnee: CGPoint(x: 69, y: 115), leftFoot: CGPoint(x: 54, y: 139),
-            rightKnee: CGPoint(x: 92, y: 115), rightFoot: CGPoint(x: 107, y: 139)
+            head: CGPoint(x: 80, y: 24 + energy), neck: CGPoint(x: 80, y: 47 + energy * 0.5), hip: CGPoint(x: 80, y: 90 + energy * 0.5),
+            leftElbow: CGPoint(x: 58, y: 57), leftHand: CGPoint(x: 45, y: 32),
+            rightElbow: CGPoint(x: 102, y: 57), rightHand: CGPoint(x: 115, y: 32),
+            leftKnee: CGPoint(x: 66, y: 118), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 94, y: 118), rightFoot: CGPoint(x: 102, y: 145)
         )
     }
 
@@ -529,11 +1197,11 @@ final class StickmanView: NSView {
         let gesture = CGFloat(sin(time * 5.3))
         return StickPose(
             head: CGPoint(x: 80, y: 26), neck: CGPoint(x: 80, y: 49), hip: CGPoint(x: 80, y: 92),
-            leftElbow: CGPoint(x: 62, y: 68), leftHand: CGPoint(x: 50 - gesture * 5, y: 76 - gesture * 6),
-            rightElbow: CGPoint(x: 99, y: 65), rightHand: CGPoint(x: 112 + gesture * 7, y: 56 + gesture * 8),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 57, y: 145),
-            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 104, y: 145),
-            headTilt: gesture * 0.035
+            leftElbow: CGPoint(x: 62, y: 68), leftHand: CGPoint(x: 52 - gesture * 5, y: 78 - gesture * 6),
+            rightElbow: CGPoint(x: 99, y: 65), rightHand: CGPoint(x: 110 + gesture * 6, y: 58 + gesture * 8),
+            leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 59, y: 145),
+            rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 102, y: 145),
+            headTilt: gesture * 0.05
         )
     }
 
@@ -543,8 +1211,8 @@ final class StickmanView: NSView {
             head: CGPoint(x: 81, y: 28), neck: CGPoint(x: 80, y: 50), hip: CGPoint(x: 78, y: 93),
             leftElbow: CGPoint(x: 61, y: 68), leftHand: CGPoint(x: 72 + tap, y: 83),
             rightElbow: CGPoint(x: 99, y: 68), rightHand: CGPoint(x: 89 - tap, y: 83),
-            leftKnee: CGPoint(x: 68, y: 120), leftFoot: CGPoint(x: 56, y: 145),
-            rightKnee: CGPoint(x: 92, y: 120), rightFoot: CGPoint(x: 104, y: 145),
+            leftKnee: CGPoint(x: 67, y: 120), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 93, y: 120), rightFoot: CGPoint(x: 102, y: 145),
             bodyLean: 0.08
         )
     }
@@ -556,11 +1224,11 @@ final class StickmanView: NSView {
         return StickPose(
             head: CGPoint(x: 77 - energy * 2, y: 25 - energy * 2),
             neck: CGPoint(x: 79, y: 48), hip: CGPoint(x: 80, y: 92),
-            leftElbow: CGPoint(x: 63, y: 68), leftHand: CGPoint(x: 57, y: 91),
+            leftElbow: CGPoint(x: 63, y: 68), leftHand: CGPoint(x: 58, y: 91),
             rightElbow: CGPoint(x: 99 + energy * 3, y: 56 - energy * 7),
             rightHand: CGPoint(x: 112 + wave * 7, y: 35 + wave * 2),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 56, y: 145),
-            rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 105, y: 145),
+            leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 103, y: 145),
             headTilt: -0.07 * energy, bodyLean: -0.04 * energy
         )
     }
@@ -571,11 +1239,11 @@ final class StickmanView: NSView {
         let flick = CGFloat(sin(min(1, progress * 1.35) * .pi)) * energy
         return StickPose(
             head: CGPoint(x: 79, y: 26 - energy), neck: CGPoint(x: 80, y: 49), hip: CGPoint(x: 78, y: 92),
-            leftElbow: CGPoint(x: 62, y: 69), leftHand: CGPoint(x: 55, y: 91),
+            leftElbow: CGPoint(x: 62, y: 69), leftHand: CGPoint(x: 56, y: 91),
             rightElbow: CGPoint(x: 100 + energy * 3, y: 64 - energy * 4),
             rightHand: CGPoint(x: 116 + flick * 7, y: 52 - flick * 11),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 56, y: 145),
-            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 105, y: 145),
+            leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 103, y: 145),
             headTilt: 0.06 * energy, bodyLean: 0.07 * energy
         )
     }
@@ -585,10 +1253,10 @@ final class StickmanView: NSView {
         let energy = CGFloat(sin(progress * .pi))
         return StickPose(
             head: CGPoint(x: 76, y: 27 - energy * 2), neck: CGPoint(x: 79, y: 49), hip: CGPoint(x: 81, y: 93),
-            leftElbow: CGPoint(x: 61, y: 66), leftHand: CGPoint(x: 51, y: 61 - energy * 5),
+            leftElbow: CGPoint(x: 61, y: 66), leftHand: CGPoint(x: 52, y: 62 - energy * 5),
             rightElbow: CGPoint(x: 99, y: 65), rightHand: CGPoint(x: 111 + energy * 4, y: 55 - energy * 4),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 56, y: 145),
-            rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 105, y: 145),
+            leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 103, y: 145),
             headTilt: -0.1 * energy, bodyLean: 0.04 * energy
         )
     }
@@ -601,8 +1269,8 @@ final class StickmanView: NSView {
             leftElbow: CGPoint(x: 63, y: 69), leftHand: CGPoint(x: 58, y: 92),
             rightElbow: CGPoint(x: 101 + energy * 4, y: 62 - energy * 4),
             rightHand: CGPoint(x: 120 + energy * 7, y: 54 - energy * 8),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 56, y: 145),
-            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 105, y: 145),
+            leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 103, y: 145),
             headTilt: 0.05 * energy, bodyLean: 0.05 * energy
         )
     }
@@ -614,55 +1282,30 @@ final class StickmanView: NSView {
             head: CGPoint(x: 80, y: 25 - energy * 2), neck: CGPoint(x: 80, y: 48), hip: CGPoint(x: 80, y: 92),
             leftElbow: CGPoint(x: 62, y: 63), leftHand: CGPoint(x: 75 - energy * 4, y: 72 - energy * 5),
             rightElbow: CGPoint(x: 98, y: 63), rightHand: CGPoint(x: 85 + energy * 4, y: 72 - energy * 5),
-            leftKnee: CGPoint(x: 68, y: 119), leftFoot: CGPoint(x: 56, y: 145),
-            rightKnee: CGPoint(x: 92, y: 119), rightFoot: CGPoint(x: 105, y: 145),
-            bodyLean: 0
+            leftKnee: CGPoint(x: 67, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+            rightKnee: CGPoint(x: 93, y: 119), rightFoot: CGPoint(x: 103, y: 145)
         )
     }
 
     private func errorPose() -> StickPose {
-        let shake = CGFloat(sin(time * 34)) * 4
+        let shake = CGFloat(sin(time * 34)) * 3
         return StickPose(
             head: CGPoint(x: 80 + shake, y: 28), neck: CGPoint(x: 80, y: 50), hip: CGPoint(x: 80, y: 94),
-            leftElbow: CGPoint(x: 60, y: 62), leftHand: CGPoint(x: 48, y: 49),
-            rightElbow: CGPoint(x: 100, y: 62), rightHand: CGPoint(x: 112, y: 49),
-            leftKnee: CGPoint(x: 67, y: 120), leftFoot: CGPoint(x: 53, y: 145),
-            rightKnee: CGPoint(x: 94, y: 120), rightFoot: CGPoint(x: 108, y: 145)
-        )
-    }
-
-    private func sleepingPose() -> StickPose {
-        let breath = CGFloat(sin(time * 1.25))
-        return StickPose(
-            head: CGPoint(x: 64, y: 70 + breath), neck: CGPoint(x: 75, y: 85), hip: CGPoint(x: 82, y: 112),
-            leftElbow: CGPoint(x: 57, y: 93), leftHand: CGPoint(x: 71, y: 107),
-            rightElbow: CGPoint(x: 92, y: 91), rightHand: CGPoint(x: 80, y: 108),
-            leftKnee: CGPoint(x: 60, y: 126), leftFoot: CGPoint(x: 45, y: 145),
-            rightKnee: CGPoint(x: 104, y: 126), rightFoot: CGPoint(x: 121, y: 145),
-            headTilt: -0.38, bodyLean: -0.22
-        )
-    }
-
-    private func perchedPose() -> StickPose {
-        let breath = CGFloat(sin(time * 1.45)) * 0.65
-        return StickPose(
-            head: CGPoint(x: 77, y: 39 + breath), neck: CGPoint(x: 79, y: 61 + breath), hip: CGPoint(x: 82, y: 100),
-            leftElbow: CGPoint(x: 62, y: 77), leftHand: CGPoint(x: 58, y: 108),
-            rightElbow: CGPoint(x: 98, y: 77), rightHand: CGPoint(x: 105, y: 108),
-            leftKnee: CGPoint(x: 55, y: 113), leftFoot: CGPoint(x: 98, y: 139),
-            rightKnee: CGPoint(x: 108, y: 113), rightFoot: CGPoint(x: 65, y: 139),
-            headTilt: -0.04, bodyLean: -0.035
+            leftElbow: CGPoint(x: 60, y: 62), leftHand: CGPoint(x: 49, y: 50),
+            rightElbow: CGPoint(x: 100, y: 62), rightHand: CGPoint(x: 111, y: 50),
+            leftKnee: CGPoint(x: 66, y: 120), leftFoot: CGPoint(x: 56, y: 145),
+            rightKnee: CGPoint(x: 94, y: 120), rightFoot: CGPoint(x: 104, y: 145)
         )
     }
 
     private func combatPose() -> StickPose {
         let bounce = CGFloat(sin(time * 7.8)) * 2.2
         var guardPose = StickPose(
-            head: CGPoint(x: 83, y: 29 + bounce), neck: CGPoint(x: 78, y: 51 + bounce), hip: CGPoint(x: 76, y: 91 + bounce),
+            head: CGPoint(x: 83, y: 29 + bounce), neck: CGPoint(x: 78, y: 51 + bounce), hip: CGPoint(x: 76, y: 93 + bounce),
             leftElbow: CGPoint(x: 61, y: 59 + bounce), leftHand: CGPoint(x: 72, y: 48 + bounce),
             rightElbow: CGPoint(x: 98, y: 59 + bounce), rightHand: CGPoint(x: 91, y: 45 + bounce),
-            leftKnee: CGPoint(x: 61, y: 116 + bounce), leftFoot: CGPoint(x: 47, y: 142),
-            rightKnee: CGPoint(x: 92, y: 114 + bounce), rightFoot: CGPoint(x: 112, y: 139),
+            leftKnee: CGPoint(x: 61, y: 118), leftFoot: CGPoint(x: 50, y: 145),
+            rightKnee: CGPoint(x: 96, y: 116), rightFoot: CGPoint(x: 106, y: 145),
             headTilt: 0.08, bodyLean: 0.1
         )
 
@@ -673,7 +1316,7 @@ final class StickmanView: NSView {
         case .guardStance:
             return guardPose
         case .dodge(let direction):
-            return guardPose.offsetBy(dx: direction * strike * 20, dy: strike * 6)
+            return guardPose.offsetBy(dx: direction * strike * 14, dy: 0)
         case .jab:
             guardPose.head.x -= strike * 5
             guardPose.neck.x += strike * 7
@@ -682,11 +1325,12 @@ final class StickmanView: NSView {
             guardPose.rightHand = CGPoint(x: 100 + strike * 42, y: 49)
             return guardPose
         case .kick:
-            guardPose.neck.x += strike * 8
-            guardPose.hip.x += strike * 12
+            guardPose.neck.x -= strike * 6
+            guardPose.hip.x -= strike * 2
             guardPose.rightKnee = CGPoint(x: 98 + strike * 12, y: 102 - strike * 14)
-            guardPose.rightFoot = CGPoint(x: 111 + strike * 39, y: 112 - strike * 24)
-            guardPose.leftFoot = CGPoint(x: 51, y: 144)
+            guardPose.rightFoot = CGPoint(x: 111 + strike * 32, y: 140 - strike * 52)
+            guardPose.leftFoot = CGPoint(x: 52, y: 145)
+            guardPose.bodyLean = 0.1 - strike * 0.25
             return guardPose
         case .lasso:
             guardPose.rightElbow = CGPoint(x: 104, y: 48 - strike * 12)
@@ -695,48 +1339,151 @@ final class StickmanView: NSView {
         case .groundSlam:
             guardPose.head.y += strike * 22
             guardPose.neck.y += strike * 24
-            guardPose.hip.y += strike * 28
+            guardPose.hip.y += strike * 22
             guardPose.leftHand = CGPoint(x: 54, y: 120 + strike * 24)
             guardPose.rightHand = CGPoint(x: 105, y: 120 + strike * 24)
-            guardPose.leftKnee.y += strike * 17
-            guardPose.rightKnee.y += strike * 17
             return guardPose
         case .hit(let direction):
-            return guardPose.offsetBy(dx: direction.dx * strike * 18, dy: direction.dy * strike * -12)
+            var hit = guardPose.offsetBy(dx: direction.dx * strike * 10, dy: 0)
+            hit.leftFoot = guardPose.leftFoot
+            hit.rightFoot = guardPose.rightFoot
+            hit.bodyLean -= direction.dx * strike * 0.3
+            hit.headTilt -= direction.dx * strike * 0.4
+            return hit
         case .victory:
-            return happyPose().offsetBy(dx: 0, dy: -strike * 12)
-        }
-    }
-
-    private var visibleTaskAnimation: StickmanTaskAnimation? {
-        switch previewState {
-        case .agentWave: return .spawnAgent
-        case .browserWand: return .openBrowserTab
-        case .calendarPeek: return .checkCalendar
-        case .permissionKey: return .requestPermission
-        case .connectorLink: return .connectService
-        default: return taskAnimation
+            return happyPose()
         }
     }
 
     private func taskProgress(duration: TimeInterval) -> CGFloat {
-        let elapsed: TimeInterval
-        if previewTime != nil {
-            elapsed = time.truncatingRemainder(dividingBy: duration)
-        } else {
-            elapsed = max(0, time - taskAnimationStartedAt)
-        }
+        let elapsed = max(0, time - taskAnimationStartedAt)
         return CGFloat(max(0, min(1, elapsed / duration)))
     }
 
+    // MARK: Solving
+
+    private static func solve(_ pose: StickPose) -> Skeleton {
+        let leaned = leanApplied(pose)
+
+        // Torso and head keep their length; the authored direction is kept.
+        let hip = leaned.hip
+        let neck = point(from: hip, toward: leaned.neck, length: Bone.torso)
+        let neckShift = CGPoint(x: neck.x - leaned.neck.x, y: neck.y - leaned.neck.y)
+        let headTarget = CGPoint(x: leaned.head.x + neckShift.x, y: leaned.head.y + neckShift.y)
+        let headDirection = rotate(unit(from: neck, to: headTarget, fallback: CGPoint(x: 0, y: -1)), by: pose.headTilt * 0.6)
+        let head = CGPoint(x: neck.x + headDirection.x * Bone.neck, y: neck.y + headDirection.y * Bone.neck)
+
+        func shifted(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x + neckShift.x, y: point.y + neckShift.y) }
+
+        let leftArm = twoBone(root: neck, target: shifted(leaned.leftHand), hint: shifted(leaned.leftElbow), upper: Bone.upperArm, lower: Bone.forearm, outward: -1)
+        let rightArm = twoBone(root: neck, target: shifted(leaned.rightHand), hint: shifted(leaned.rightElbow), upper: Bone.upperArm, lower: Bone.forearm, outward: 1)
+        let leftLeg = twoBone(root: hip, target: leaned.leftFoot, hint: leaned.leftKnee, upper: Bone.thigh, lower: Bone.shin, outward: -1)
+        let rightLeg = twoBone(root: hip, target: leaned.rightFoot, hint: leaned.rightKnee, upper: Bone.thigh, lower: Bone.shin, outward: 1)
+
+        var skeleton = Skeleton(
+            head: head, neck: neck, hip: hip,
+            leftElbow: leftArm.joint, leftHand: leftArm.end,
+            rightElbow: rightArm.joint, rightHand: rightArm.end,
+            leftKnee: leftLeg.joint, leftFoot: leftLeg.end,
+            rightKnee: rightLeg.joint, rightFoot: rightLeg.end
+        )
+
+        if abs(pose.hangSwing) > 0.0001 {
+            let pivot = skeleton.head
+            func swing(_ p: CGPoint) -> CGPoint { rotate(p, around: pivot, by: pose.hangSwing) }
+            skeleton = Skeleton(
+                head: pivot, neck: swing(skeleton.neck), hip: swing(skeleton.hip),
+                leftElbow: swing(skeleton.leftElbow), leftHand: swing(skeleton.leftHand),
+                rightElbow: swing(skeleton.rightElbow), rightHand: swing(skeleton.rightHand),
+                leftKnee: swing(skeleton.leftKnee), leftFoot: swing(skeleton.leftFoot),
+                rightKnee: swing(skeleton.rightKnee), rightFoot: swing(skeleton.rightFoot)
+            )
+        }
+        return skeleton
+    }
+
+    /// Leaning rotates the upper body around the hip; legs stay planted.
+    private static func leanApplied(_ pose: StickPose) -> StickPose {
+        guard abs(pose.bodyLean) > 0.0001 else { return pose }
+        var copy = pose
+        for keyPath in [\StickPose.head, \.neck, \.leftElbow, \.leftHand, \.rightElbow, \.rightHand] {
+            copy[keyPath: keyPath] = rotate(pose[keyPath: keyPath], around: pose.hip, by: pose.bodyLean)
+        }
+        return copy
+    }
+
+    /// Two-bone inverse kinematics. The joint bends toward the side of `hint`; when the hint
+    /// sits on the bone line, it bends away from the body (`outward` is -1 for left limbs).
+    private static func twoBone(
+        root: CGPoint,
+        target: CGPoint,
+        hint: CGPoint,
+        upper: CGFloat,
+        lower: CGFloat,
+        outward: CGFloat
+    ) -> (joint: CGPoint, end: CGPoint) {
+        var dx = target.x - root.x
+        var dy = target.y - root.y
+        var distance = hypot(dx, dy)
+        if distance < 0.0001 {
+            dx = 0
+            dy = 1
+            distance = 1
+        }
+        let ux = dx / distance
+        let uy = dy / distance
+        let reach = min(max(distance, abs(upper - lower) + 0.5), (upper + lower) * 0.999)
+        let end = CGPoint(x: root.x + ux * reach, y: root.y + uy * reach)
+        let cosine = (upper * upper + reach * reach - lower * lower) / (2 * upper * reach)
+        let angle = acos(min(1, max(-1, cosine)))
+        let cross = dx * (hint.y - root.y) - dy * (hint.x - root.x)
+        let hintIsOnLine = abs(cross) / distance <= 2.5
+        // A positive turn moves the joint toward -x on a downward limb and +x on a raised one.
+        let side: CGFloat = hintIsOnLine ? outward * (uy >= 0 ? -1 : 1) : (cross > 0 ? 1 : -1)
+        let c = cos(angle)
+        let s = sin(angle) * side
+        var joint = CGPoint(x: root.x + (ux * c - uy * s) * upper, y: root.y + (ux * s + uy * c) * upper)
+        if hintIsOnLine {
+            // Front-facing limbs read as straight when nearly extended (the bend points at the viewer).
+            let straightness = SMath.smoothstep(0.86, 0.995, reach / (upper + lower))
+            let straight = CGPoint(x: root.x + ux * reach * upper / (upper + lower), y: root.y + uy * reach * upper / (upper + lower))
+            joint = SMath.mix(joint, straight, straightness)
+        }
+        return (joint, end)
+    }
+
+    private static func point(from origin: CGPoint, toward target: CGPoint, length: CGFloat) -> CGPoint {
+        let direction = unit(from: origin, to: target, fallback: CGPoint(x: 0, y: -1))
+        return CGPoint(x: origin.x + direction.x * length, y: origin.y + direction.y * length)
+    }
+
+    private static func unit(from origin: CGPoint, to target: CGPoint, fallback: CGPoint) -> CGPoint {
+        let dx = target.x - origin.x
+        let dy = target.y - origin.y
+        let length = hypot(dx, dy)
+        guard length > 0.0001 else { return fallback }
+        return CGPoint(x: dx / length, y: dy / length)
+    }
+
+    private static func rotate(_ vector: CGPoint, by angle: CGFloat) -> CGPoint {
+        CGPoint(x: vector.x * cos(angle) - vector.y * sin(angle), y: vector.x * sin(angle) + vector.y * cos(angle))
+    }
+
+    private static func rotate(_ point: CGPoint, around pivot: CGPoint, by angle: CGFloat) -> CGPoint {
+        let offset = rotate(CGPoint(x: point.x - pivot.x, y: point.y - pivot.y), by: angle)
+        return CGPoint(x: pivot.x + offset.x, y: pivot.y + offset.y)
+    }
+
+    // MARK: Task props
+
     private func drawTaskEffects(context: CGContext) {
-        guard let visibleTaskAnimation else { return }
-        let joints = transformed(pose)
+        guard let taskAnimation else { return }
+        let joints = skeleton
         context.saveGState()
         context.setLineCap(.round)
         context.setLineJoin(.round)
 
-        switch visibleTaskAnimation {
+        switch taskAnimation {
         case .spawnAgent:
             let progress = taskProgress(duration: 1.55)
             let energy = CGFloat(sin(progress * .pi))
@@ -773,9 +1520,7 @@ final class StickmanView: NSView {
             context.strokePath()
 
             let tabProgress = max(0, min(1, (progress - 0.24) / 0.42))
-            let tabWidth: CGFloat = 34 * tabProgress
-            let tabHeight: CGFloat = 22 * tabProgress
-            let tabRect = CGRect(x: 109, y: 17, width: tabWidth, height: tabHeight)
+            let tabRect = CGRect(x: 109, y: 17, width: 34 * tabProgress, height: 22 * tabProgress)
             context.setFillColor(NSColor.white.withAlphaComponent(0.86 * energy).cgColor)
             context.fill(tabRect)
             context.setStrokeColor(NSColor.black.withAlphaComponent(0.8 * energy).cgColor)
@@ -787,15 +1532,12 @@ final class StickmanView: NSView {
                 context.strokePath()
             }
 
-            context.setFillColor(NSColor.black.withAlphaComponent(energy).cgColor)
             for angleIndex in 0 ..< 4 {
                 let angle = CGFloat(angleIndex) * .pi / 2
-                let inner = CGPoint(x: tip.x + cos(angle) * 3, y: tip.y + sin(angle) * 3)
-                let outer = CGPoint(x: tip.x + cos(angle) * 8, y: tip.y + sin(angle) * 8)
                 context.setStrokeColor(NSColor.black.withAlphaComponent(energy).cgColor)
                 context.setLineWidth(1.7)
-                context.move(to: inner)
-                context.addLine(to: outer)
+                context.move(to: CGPoint(x: tip.x + cos(angle) * 3, y: tip.y + sin(angle) * 3))
+                context.addLine(to: CGPoint(x: tip.x + cos(angle) * 8, y: tip.y + sin(angle) * 8))
                 context.strokePath()
             }
 
@@ -806,6 +1548,7 @@ final class StickmanView: NSView {
             context.setFillColor(NSColor.white.withAlphaComponent(0.88 * energy).cgColor)
             context.fill(rect)
             context.setStrokeColor(NSColor.black.withAlphaComponent(0.86 * energy).cgColor)
+            context.setFillColor(NSColor.black.withAlphaComponent(0.86 * energy).cgColor)
             context.setLineWidth(2)
             context.stroke(rect)
             context.move(to: CGPoint(x: rect.minX, y: rect.minY + 8))
@@ -860,129 +1603,5 @@ final class StickmanView: NSView {
             }
         }
         context.restoreGState()
-    }
-
-    private func drawStickFigure(pose: StickPose, context: CGContext) {
-        let joints = transformed(pose)
-        let whiteHalo = NSColor.white.withAlphaComponent(0.72)
-        strokeSkeleton(joints, context: context, color: whiteHalo, width: 12)
-        strokeSkeleton(joints, context: context, color: .black, width: mode == .sparring ? 7.5 : 7)
-
-        context.saveGState()
-        let headRadius: CGFloat = 17
-        context.translateBy(x: joints.head.x, y: joints.head.y)
-        context.rotate(by: pose.headTilt)
-        context.setStrokeColor(whiteHalo.cgColor)
-        context.setLineWidth(12)
-        context.strokeEllipse(in: CGRect(x: -headRadius, y: -headRadius, width: headRadius * 2, height: headRadius * 2))
-        context.setStrokeColor(NSColor.black.cgColor)
-        context.setLineWidth(mode == .sparring ? 7.5 : 7)
-        context.strokeEllipse(in: CGRect(x: -headRadius, y: -headRadius, width: headRadius * 2, height: headRadius * 2))
-        context.restoreGState()
-
-        if mode == .sparring {
-            drawCombatFocusMark(at: joints.head, context: context)
-        }
-    }
-
-    private func transformed(_ pose: StickPose) -> StickPose {
-        guard abs(pose.bodyLean) > 0.001 else { return pose }
-        let pivot = pose.hip
-        func rotate(_ point: CGPoint) -> CGPoint {
-            let angle = pose.bodyLean
-            let dx = point.x - pivot.x
-            let dy = point.y - pivot.y
-            return CGPoint(
-                x: pivot.x + dx * cos(angle) - dy * sin(angle),
-                y: pivot.y + dx * sin(angle) + dy * cos(angle)
-            )
-        }
-        var copy = pose
-        copy.head = rotate(pose.head)
-        copy.neck = rotate(pose.neck)
-        copy.leftElbow = rotate(pose.leftElbow)
-        copy.leftHand = rotate(pose.leftHand)
-        copy.rightElbow = rotate(pose.rightElbow)
-        copy.rightHand = rotate(pose.rightHand)
-        return copy
-    }
-
-    private func strokeSkeleton(_ pose: StickPose, context: CGContext, color: NSColor, width: CGFloat) {
-        context.saveGState()
-        context.setStrokeColor(color.cgColor)
-        context.setLineWidth(width)
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-
-        func segment(_ points: [CGPoint]) {
-            guard let first = points.first else { return }
-            context.move(to: first)
-            points.dropFirst().forEach(context.addLine)
-            context.strokePath()
-        }
-
-        segment([pose.neck, pose.hip])
-        segment([pose.neck, pose.leftElbow, pose.leftHand])
-        segment([pose.neck, pose.rightElbow, pose.rightHand])
-        segment([pose.hip, pose.leftKnee, pose.leftFoot])
-        segment([pose.hip, pose.rightKnee, pose.rightFoot])
-        context.restoreGState()
-    }
-
-    private func drawShadow(context: CGContext) {
-        let feetY = max(pose.leftFoot.y, pose.rightFoot.y)
-        let jumpHeight = max(0, 145 - feetY)
-        let width = max(24, 64 - jumpHeight * 0.4)
-        context.setFillColor(NSColor.black.withAlphaComponent(max(0.05, 0.16 - jumpHeight * 0.002)).cgColor)
-        context.fillEllipse(in: CGRect(x: 80 - width / 2, y: 148, width: width, height: 7))
-    }
-
-    private func drawMotionAccents(context: CGContext) {
-        guard mode == .sparring else { return }
-        let elapsed = time - combatMoveStartedAt
-        guard elapsed < 0.48 else { return }
-        switch combatMove {
-        case .jab, .kick, .dodge, .hit:
-            context.saveGState()
-            context.setStrokeColor(NSColor.black.withAlphaComponent(max(0, 0.35 - CGFloat(elapsed) * 0.6)).cgColor)
-            context.setLineWidth(2)
-            for index in 0 ..< 3 {
-                let y = 54 + CGFloat(index * 12)
-                context.move(to: CGPoint(x: 18, y: y))
-                context.addLine(to: CGPoint(x: 45 + CGFloat(index * 4), y: y - 3))
-            }
-            context.strokePath()
-            context.restoreGState()
-        default:
-            break
-        }
-    }
-
-    private func drawCombatFocusMark(at head: CGPoint, context: CGContext) {
-        guard case .guardStance = combatMove else { return }
-        let pulse = CGFloat((sin(time * 8) + 1) * 0.5)
-        context.setFillColor(NSColor.black.withAlphaComponent(0.35 + pulse * 0.25).cgColor)
-        context.fillEllipse(in: CGRect(x: head.x + 12, y: head.y - 11, width: 4, height: 4))
-    }
-
-    private func drawChatHint() {
-        guard showsChatHint, !isChatVisible, mode == .peaceful else { return }
-        let scale = min(bounds.width, bounds.height) / StickmanMetrics.designSize
-        let rect = CGRect(x: 121 * scale, y: 12 * scale, width: 29 * scale, height: 21 * scale)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 8 * scale, yRadius: 8 * scale)
-        NSColor.white.withAlphaComponent(0.9).setFill()
-        path.fill()
-        NSColor.black.withAlphaComponent(0.75).setStroke()
-        path.lineWidth = max(1, 1.5 * scale)
-        path.stroke()
-        NSColor.black.withAlphaComponent(0.72).setFill()
-        for index in 0 ..< 3 {
-            NSBezierPath(ovalIn: CGRect(
-                x: (129 + CGFloat(index) * 7) * scale,
-                y: 21 * scale,
-                width: 3 * scale,
-                height: 3 * scale
-            )).fill()
-        }
     }
 }

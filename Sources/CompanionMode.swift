@@ -3,6 +3,9 @@ import AppKit
 enum StickmanMetrics {
     static let designSize: CGFloat = 160
     static let characterSize: CGFloat = 112
+    static let groundLine: CGFloat = 145
+    /// Distance from the bottom of the character window to the soles of his feet.
+    static let footInset: CGFloat = (designSize - groundLine) * characterSize / designSize
 }
 
 enum StickmanMode: String, Codable {

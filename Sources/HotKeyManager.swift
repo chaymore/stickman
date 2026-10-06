@@ -112,6 +112,14 @@ final class HotKeyManager {
         }
     }
 
+    /// Option+right-click sends Stickman somewhere. A plain right-click stays with the app under it.
+    static func isWalkClick(flags: NSEvent.ModifierFlags) -> Bool {
+        let flags = flags.intersection(.deviceIndependentFlagsMask)
+        return flags.contains(.option)
+            && !flags.contains(.command)
+            && !flags.contains(.control)
+    }
+
     static func isVoiceShortcut(flags: NSEvent.ModifierFlags) -> Bool {
         let flags = flags.intersection(.deviceIndependentFlagsMask)
         return flags.contains(.control)
