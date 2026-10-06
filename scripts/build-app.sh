@@ -8,56 +8,37 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 ARCH_LIST="${STICKMAN_ARCHS:-arm64 x86_64}"
-MINIMUM_MACOS_VERSION="${STICKMAN_MINIMUM_MACOS_VERSION:-12.0}"
+MINIMUM_MACOS_VERSION="${STICKMAN_MINIMUM_MACOS_VERSION:-13.0}"
 BUNDLE_ID="${STICKMAN_BUNDLE_ID:-com.chaymore.Stickman}"
-APP_VERSION="${STICKMAN_VERSION:-0.5.0}"
-BUILD_NUMBER="${STICKMAN_BUILD_NUMBER:-6}"
+APP_VERSION="${STICKMAN_VERSION:-0.6.0}"
+BUILD_NUMBER="${STICKMAN_BUILD_NUMBER:-7}"
 
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ROOT_DIR/.local-build"
-BUILD_ROOT="$(mktemp -d "$ROOT_DIR/.local-build/StickmanRelease.XXXXXX")"
-cleanup() { rm -rf "$BUILD_ROOT" 2>/dev/null || true }
-trap cleanup EXIT
 
-SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
-ARCH_BINARIES=()
-BUILD_PIDS=()
+# Stickman.app carries Stickman Blocker's root daemon, installer, and recovery tool
+# alongside the app itself. SwiftPM builds all four, once per architecture.
+PRODUCTS=(Stickman StickmanBlockerDaemon StickmanBlockerInstaller stickman-blocker-recover)
+SCRATCH_ROOT="${STICKMAN_BUILD_PATH:-${TMPDIR:-/tmp}/stickman-build}"
+BIN_DIRS=()
 for ARCH in ${(z)ARCH_LIST}; do
-  ARCH_BUILD_DIR="$BUILD_ROOT/$ARCH"
-  mkdir -p "$ARCH_BUILD_DIR/module-cache"
-  ARCH_BINARY="$ARCH_BUILD_DIR/StickmanBinary"
-  ARCH_BINARIES+=("$ARCH_BINARY")
-  (
-    xcrun --sdk macosx swiftc \
-      -O \
-      -whole-module-optimization \
-      -swift-version 5 \
-      -target "$ARCH-apple-macos$MINIMUM_MACOS_VERSION" \
-      -sdk "$SDK_PATH" \
-      -module-cache-path "$ARCH_BUILD_DIR/module-cache" \
-      -framework AppKit \
-      -framework ApplicationServices \
-      -framework CoreGraphics \
-      -framework AVFoundation \
-      -framework EventKit \
-      -framework Security \
-      -framework UserNotifications \
-      -framework Network \
-      "$ROOT_DIR"/Sources/*.swift \
-      -o "$ARCH_BINARY"
-  ) &
-  BUILD_PIDS+=("$!")
+  SCRATCH="$SCRATCH_ROOT/$ARCH"
+  (cd "$ROOT_DIR" && swift build -c release --triple "$ARCH-apple-macosx$MINIMUM_MACOS_VERSION" --scratch-path "$SCRATCH")
+  BIN_DIRS+=("$(cd "$ROOT_DIR" && swift build -c release --triple "$ARCH-apple-macosx$MINIMUM_MACOS_VERSION" --scratch-path "$SCRATCH" --show-bin-path)")
 done
 
-for BUILD_PID in "${BUILD_PIDS[@]}"; do
-  wait "$BUILD_PID"
+for PRODUCT in "${PRODUCTS[@]}"; do
+  DESTINATION="$MACOS_DIR/$PRODUCT"
+  [[ "$PRODUCT" == "Stickman" ]] && DESTINATION="$MACOS_DIR/StickmanBinary"
+  INPUTS=()
+  for BIN_DIR in "${BIN_DIRS[@]}"; do INPUTS+=("$BIN_DIR/$PRODUCT"); done
+  if (( ${#INPUTS[@]} == 1 )); then
+    cp "${INPUTS[1]}" "$DESTINATION"
+  else
+    lipo -create "${INPUTS[@]}" -output "$DESTINATION"
+  fi
+  chmod +x "$DESTINATION"
 done
-
-if (( ${#ARCH_BINARIES[@]} == 1 )); then
-  cp "${ARCH_BINARIES[1]}" "$MACOS_DIR/StickmanBinary"
-else
-  lipo -create "${ARCH_BINARIES[@]}" -output "$MACOS_DIR/StickmanBinary"
-fi
 
 cp "$ROOT_DIR/STICKMAN_SYSTEM_PROMPT.md" "$RESOURCES_DIR/STICKMAN_SYSTEM_PROMPT.md"
 if [[ -d "$ROOT_DIR/Resources" ]]; then
@@ -136,7 +117,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSAppleEventsUsageDescription</key>
-  <string>Stickman controls Chrome tabs and redirects distracting sites only when you request it or enable a focus rule.</string>
+  <string>Stickman controls Chrome tabs when you ask, and redirects blocked Safari and Chrome tabs to the Blocked by Stickman page.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>
   <string>Stickman reads your Calendar.app events to help with classes, meetings, and planned homework time.</string>
   <key>NSCalendarsUsageDescription</key>

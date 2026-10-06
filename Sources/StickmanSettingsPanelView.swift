@@ -46,7 +46,7 @@ final class StickmanSettingsPanelView: NSView, NSTextFieldDelegate {
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let focusButton = NSButton(title: "Start 25 min", target: nil, action: nil)
     private let endFocusButton = NSButton(title: "End", target: nil, action: nil)
-    private let blockerRow = SettingsToggleRow(title: "Website blocker", detail: "")
+    private let blockerRow = SettingsToggleRow(title: "Bedtime guard", detail: "")
 
     private let sitesHeader = SettingsSectionHeader("Blocked sites")
     private let sitesCard = StickmanCardView()
@@ -223,7 +223,7 @@ final class StickmanSettingsPanelView: NSView, NSTextFieldDelegate {
     func refresh() {
         let settings = WebsiteBlockerService.shared.settingsSnapshot()
         blockerRow.toggle.state = settings.enabled ? .on : .off
-        blockerRow.detail = NightLockBridge.shared.shortStatus
+        blockerRow.detail = "Blocks your list below at bedtime. \(StickmanBlocker.statusSummary)"
         statusLabel.stringValue = WebsiteBlockerService.shared.statusSummary
         screenRow.toggle.state = automaticallySharesScreen ? .on : .off
         wanderRow.toggle.state = Self.allowsWandering ? .on : .off

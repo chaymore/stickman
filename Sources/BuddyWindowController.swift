@@ -21,6 +21,9 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
     private var positionBeforeHide: CGPoint?
     private var isShown = false
     private(set) var isHiddenForScreenShare = false
+    private(set) var isTuckedInNotch = false
+    private var notchMove: NotchMove?
+    private var scriptedPosition: CGPoint?
     private var settingsReturnsToChat = false
 
     private var stillSince: TimeInterval = 0
@@ -131,6 +134,10 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         guard let window else { return }
         isShown = true
         guard !isHiddenForScreenShare else { return }
+        if isTuckedInNotch {
+            comeOutOfNotch()
+            return
+        }
         if !hasBeenPlaced {
             // First appearance: drop in from near the top of the main screen.
             let frame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -174,6 +181,8 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         guard isShown, let window else { return }
 
         if hidden {
+            settleNotchMove()
+            guard !isTuckedInNotch else { return }
             StickmanModeController.shared.setMode(.peaceful, reason: "screen share")
             closePanel(animated: false)
             ScreenEffectsOverlayController.shared.clearGuidance()
@@ -186,6 +195,7 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
                 window.animator().alphaValue = 0
             }
         } else {
+            guard !isTuckedInNotch else { return }
             scanWorld(now: CACurrentMediaTime())
             applyPosition()
             window.ignoresMouseEvents = false
@@ -261,7 +271,9 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
 
     /// A finished session gets a happy hop; one waiting on the user gets a wave.
     private func reactToClaudeUpdate(_ session: ClaudeCodeSession, needsAttention: Bool) {
-        guard isShown, !isHiddenForScreenShare, StickmanModeController.shared.mode == .peaceful else { return }
+        guard isShown, !isHiddenForScreenShare, !isTuckedInNotch, notchMove == nil,
+              StickmanModeController.shared.mode == .peaceful
+        else { return }
         markInteraction()
         if needsAttention {
             stickmanView.setFacing(NSEvent.mouseLocation.x - locomotion.position.x)
@@ -294,6 +306,7 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
 
     private func presentPanel(_ content: StickmanCompanionPanelController.Content) {
         guard let window else { return }
+        if isTuckedInNotch || notchMove != nil { comeOutOfNotch() }
         locomotion.stop()
         clearPerch()
         stickmanView.setRest(.awake)
@@ -340,6 +353,12 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         let now = CACurrentMediaTime()
         let dt = min(1.0 / 20.0, max(1.0 / 240.0, now - lastTickAt))
         lastTickAt = now
+
+        if stepNotchMove(now: now) {
+            stickmanView.tick(dt: dt)
+            if panel.isVisible, let window { panel.follow(window.frame) }
+            return
+        }
 
         if now - lastWorldScanAt > 0.25 { scanWorld(now: now) }
         followAnchorWindow()
@@ -556,7 +575,7 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
     // MARK: Pointer
 
     private func beginDrag(at point: CGPoint) {
-        guard StickmanModeController.shared.mode == .peaceful else { return }
+        guard StickmanModeController.shared.mode == .peaceful, notchMove == nil else { return }
         clearPerch()
         stickmanView.setRest(.awake)
         dragOffset = CGVector(dx: locomotion.position.x - point.x, dy: locomotion.position.y - point.y)
@@ -576,7 +595,7 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
     }
 
     private func poke() {
-        guard StickmanModeController.shared.mode == .peaceful, locomotion.isGrounded else { return }
+        guard StickmanModeController.shared.mode == .peaceful, locomotion.isGrounded, notchMove == nil else { return }
         let wasResting = stickmanView.currentRest != .awake
         clearPerch()
         stickmanView.setRest(.awake)
@@ -587,7 +606,7 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
 
     /// Right-click destination. Stickman walks there, leaping onto or off windows as needed.
     func walkStickman(to screenPoint: NSPoint) {
-        guard StickmanModeController.shared.mode == .peaceful, !panel.isVisible else { return }
+        guard StickmanModeController.shared.mode == .peaceful, !panel.isVisible, !isTuckedInNotch, notchMove == nil else { return }
         if case .held = locomotion.state { return }
         scanWorld(now: CACurrentMediaTime())
         guard let destination = StickmanSurfaceMap.destination(for: screenPoint, windows: windows, surfaces: locomotion.surfaces) else { return }
@@ -596,6 +615,184 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         stickmanView.setRest(.awake)
         locomotion.go(to: .init(kind: destination.kind, x: screenPoint.x))
         markInteraction()
+    }
+
+    // MARK: Notch
+
+    func toggleNotchHide() {
+        if isTuckedInNotch || notchMove?.isHiding == true {
+            comeOutOfNotch()
+        } else {
+            tuckIntoNotch()
+        }
+    }
+
+    /// Crouch, leap up under the notch, and get pulled up into it.
+    private func tuckIntoNotch() {
+        guard isShown, !isHiddenForScreenShare, notchMove == nil, !isTuckedInNotch else { return }
+        if case .held = locomotion.state { return }
+        StickmanModeController.shared.setMode(.peaceful, reason: "notch")
+        closePanel(animated: false)
+        clearPerch()
+        locomotion.stop()
+        stickmanView.setRest(.awake)
+
+        let notch = Self.notchGeometry()
+        let entry = CGPoint(x: notch.rect.midX, y: notch.rect.minY - Self.handReach)
+        let start = locomotion.position
+        stickmanView.setFacing(entry.x - start.x)
+        let now = CACurrentMediaTime()
+        if entry.y - start.y > 24 {
+            notchMove = NotchMove(phase: .crouch, startedAt: now, duration: 0.16, from: start, to: entry, aboveScreen: notch.screenTop + 24)
+        } else {
+            notchMove = NotchMove(phase: .climb, startedAt: now, duration: 0.42, from: start, to: CGPoint(x: entry.x, y: notch.screenTop + 24), aboveScreen: notch.screenTop + 24)
+        }
+    }
+
+    /// Slide out of the notch, dangle for a moment, then drop to the ledge below.
+    private func comeOutOfNotch() {
+        guard let window else { return }
+        let now = CACurrentMediaTime()
+        if let move = notchMove, move.isHiding {
+            // Changed his mind mid-leap: fall from wherever he is.
+            notchMove = nil
+            locomotion.place(at: scriptedPosition ?? locomotion.position)
+            scriptedPosition = nil
+            return
+        }
+        guard isTuckedInNotch else { return }
+        isTuckedInNotch = false
+        guard isShown, !isHiddenForScreenShare else { return }
+
+        let notch = Self.notchGeometry()
+        let top = CGPoint(x: notch.rect.midX, y: notch.screenTop + 24)
+        // Hang with his head still inside the notch and his legs dangling out.
+        let hang = CGPoint(x: notch.rect.midX, y: notch.rect.minY - Self.handReach + 16)
+        notchMove = NotchMove(phase: .emerge, startedAt: now, duration: 0.34, from: top, to: hang, aboveScreen: top.y)
+        place(window: window, at: top)
+        window.alphaValue = 1
+        window.ignoresMouseEvents = false
+        window.orderFrontRegardless()
+        startTicking()
+        combatDirector.start()
+        startWindowAffinityTracking()
+        markInteraction()
+    }
+
+    /// Drives the scripted notch moves. Returns false when physics should run instead.
+    private func stepNotchMove(now: TimeInterval) -> Bool {
+        guard var move = notchMove, let window else { return false }
+        let elapsed = max(0, now - move.startedAt)
+        let progress = CGFloat(min(1, elapsed / move.duration))
+        let gravity = locomotion.tuning.gravity
+        var position = move.from
+        let motion: StickmanMotion
+
+        switch move.phase {
+        case .crouch:
+            motion = .crouching(progress: progress)
+        case .leap:
+            let t = CGFloat(min(elapsed, move.duration))
+            position = CGPoint(x: move.from.x + move.launch.dx * t, y: move.from.y + move.launch.dy * t - 0.5 * gravity * t * t)
+            motion = .airborne(velocity: CGVector(dx: move.launch.dx, dy: move.launch.dy - gravity * t), planned: true)
+        case .climb:
+            position = SMath.mix(move.from, move.to, progress * progress)
+            motion = .airborne(velocity: CGVector(dx: 0, dy: 900), planned: true)
+        case .emerge:
+            position = SMath.mix(move.from, move.to, SMath.easeOutCubic(progress))
+            motion = .held(velocity: .zero)
+        case .hang:
+            motion = .held(velocity: CGVector(dx: CGFloat(sin(elapsed * 7)) * 120, dy: 0))
+        }
+
+        scriptedPosition = position
+        place(window: window, at: position)
+        stickmanView.updateMotion(motion, heightAboveGround: 400)
+        guard progress >= 1 else { return true }
+
+        switch move.phase {
+        case .crouch:
+            let rise = max(1, move.to.y - move.from.y)
+            let launchSpeed = (2 * gravity * rise).squareRoot()
+            let duration = Double(launchSpeed / gravity)
+            move.phase = .leap
+            move.startedAt = now
+            move.duration = duration
+            move.launch = CGVector(dx: (move.to.x - move.from.x) / CGFloat(duration), dy: launchSpeed)
+            notchMove = move
+        case .leap:
+            notchMove = NotchMove(phase: .climb, startedAt: now, duration: 0.4, from: position, to: CGPoint(x: position.x, y: move.aboveScreen), aboveScreen: move.aboveScreen)
+        case .climb:
+            notchMove = nil
+            finishTuck()
+        case .emerge:
+            notchMove = NotchMove(phase: .hang, startedAt: now, duration: 0.4, from: position, to: position, aboveScreen: move.aboveScreen)
+        case .hang:
+            notchMove = nil
+            scriptedPosition = nil
+            locomotion.place(at: position)
+            scanWorld(now: now)
+        }
+        return true
+    }
+
+    private func finishTuck() {
+        isTuckedInNotch = true
+        scriptedPosition = nil
+        positionBeforeHide = nil
+        window?.alphaValue = 0
+        window?.ignoresMouseEvents = true
+        stopTicking()
+        combatDirector.stop()
+        stopWindowAffinityTracking()
+    }
+
+    /// Ends a notch move at once, for when a screen share starts mid-move.
+    private func settleNotchMove() {
+        guard let move = notchMove else { return }
+        notchMove = nil
+        if move.isHiding {
+            finishTuck()
+        } else {
+            scriptedPosition = nil
+            locomotion.place(at: move.to)
+        }
+    }
+
+    private func place(window: NSWindow, at feet: CGPoint) {
+        let origin = NSPoint(
+            x: (feet.x - characterSize.width / 2).rounded(),
+            y: (feet.y - StickmanMetrics.footInset).rounded()
+        )
+        if window.frame.origin != origin { window.setFrameOrigin(origin) }
+    }
+
+    /// Height from his feet to his raised hands, so they reach the bottom of the notch.
+    private static let handReach: CGFloat = 96
+
+    /// The camera notch on the built-in display, or a notch-sized spot at the top center
+    /// of the main screen's menu bar when no display has one.
+    static func notchGeometry() -> (rect: NSRect, screenTop: CGFloat) {
+        let screens = NSScreen.screens
+        let notched = screens.first { $0.safeAreaInsets.top > 0 }
+        guard let screen = notched ?? NSScreen.main ?? screens.first else {
+            return (NSRect(x: 640, y: 860, width: 180, height: 32), 900)
+        }
+        let frame = screen.frame
+        let menuBarHeight = max(24, frame.maxY - screen.visibleFrame.maxY)
+        if notched != nil, let left = screen.auxiliaryTopLeftArea, let right = screen.auxiliaryTopRightArea {
+            let height = screen.safeAreaInsets.top
+            // The side areas may be global or relative to the screen; use whichever lands on it.
+            for offset in [0, frame.minX] {
+                let minX = left.maxX + offset
+                let maxX = right.minX + offset
+                if minX >= frame.minX, maxX <= frame.maxX, maxX - minX > 60 {
+                    return (NSRect(x: minX, y: frame.maxY - height, width: maxX - minX, height: height), frame.maxY)
+                }
+            }
+        }
+        let width: CGFloat = 180
+        return (NSRect(x: frame.midX - width / 2, y: frame.maxY - menuBarHeight, width: width, height: menuBarHeight), frame.maxY)
     }
 
     // MARK: Sparring
@@ -789,6 +986,27 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
     }
 }
 
+private struct NotchMove {
+    enum Phase {
+        case crouch
+        case leap
+        case climb
+        case emerge
+        case hang
+    }
+
+    var phase: Phase
+    var startedAt: TimeInterval
+    var duration: TimeInterval
+    var from: CGPoint
+    var to: CGPoint
+    /// Feet height that puts him fully above the screen's top edge.
+    var aboveScreen: CGFloat
+    var launch = CGVector.zero
+
+    var isHiding: Bool { [.crouch, .leap, .climb].contains(phase) }
+}
+
 private struct PerchTarget {
     let identity: String
     let kind: StickmanSurface.Kind
@@ -819,4 +1037,9 @@ private final class StickmanCharacterWindow: NSPanel {
     override var canBecomeKey: Bool { true }
 
     override var canBecomeMain: Bool { true }
+
+    /// Lets Stickman leave the screen's top edge when he climbs into the notch.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
 }

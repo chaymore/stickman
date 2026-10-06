@@ -22,8 +22,8 @@ Sparring never synthesizes clicks, edits documents, closes apps, or changes anot
 - `CompanionMode.swift`: shared peaceful/sparring mode state and notifications.
 - `StickmanChatPanelView.swift`: request-scoped screen capture and response marker parsing.
 - `WindowActionService.swift`: explicit user-requested window placement through macOS Accessibility.
-- `NightLockBridge.swift`: read-only status bridge to the installed protected NightLock service.
-- `WebsiteBlockerService.swift`: flexible bedtime guard plus temporary focus sessions.
+- `StickmanBlocker.swift`, `BlockerBrowserService.swift`, `BlockerSettingsWindowController.swift`, `RoutineWindowController.swift`, `StickmanBlockPage.swift`, and `Blocker/`: Stickman Blocker (formerly NightLock). A root daemon enforces `/etc/hosts`; Stickman shows status, redirects tabs to the "Blocked by Stickman" page, and hosts Protected Settings and the Night Routine window.
+- `WebsiteBlockerService.swift`: softer bedtime guard plus temporary focus sessions, using the same block page.
 - `OpenRouterClient.swift`: optional Keychain-backed provider path; OpenAI remains the default when configured.
 - `BackgroundAgentCoordinator.swift`: persistent OpenAI background jobs, polling, cancellation, completion notifications, and explicit browser-link handoff.
 - `BrowserControlService.swift`: native Chrome tab listing, opening, searching, and activation through macOS Automation.
@@ -34,7 +34,7 @@ Sparring never synthesizes clicks, edits documents, closes apps, or changes anot
 
 ## Interaction map
 
-- `Option+B`: show or hide Stickman.
+- `Option+B`: Stickman leaps into the notch and hides; press again and he drops back out.
 - `Option+Space`: peaceful quick assist with fresh screen context.
 - `Option+F`: call a truce while sparring.
 - `Control+-`: open Stickman's chat menu.

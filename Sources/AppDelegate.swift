@@ -1,6 +1,7 @@
 import AppKit
 import Dispatch
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var stickmanWindowController: StickmanWindowController?
     private var hotKeyManager: HotKeyManager?
@@ -12,10 +13,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var shareStatusMenuItem: NSMenuItem?
     private var showMenuItem: NSMenuItem?
     private var stopFightingMenuItem: NSMenuItem?
+    private var notchMenuItem: NSMenuItem?
+    private var quitMenuItem: NSMenuItem?
+    private var keepsRunningMenuItem: NSMenuItem?
+    private var blockerStatusMenuItem: NSMenuItem?
+    private var blockerScheduleMenuItem: NSMenuItem?
+    private var blockerAllowanceMenuItems: [NSMenuItem] = []
+    private var blockerInstallMenuItem: NSMenuItem?
     /// Set when the user summons Stickman during a share; cleared when the share ends.
     private var showsDuringCurrentShare = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if handOffToRunningCopy() { return }
         LegacyMigrationService.runIfNeeded()
         NSApp.setActivationPolicy(.accessory)
         DesktopContextProvider.shared.start()
@@ -25,8 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         CalendarNudgeService.shared.start()
         ProactiveStudyService.shared.start()
 
+        StickmanBlockPage.prepare()
         showStickman()
         configureStatusItem()
+        StickmanBlocker.shared.start()
 
         let hotKeyManager = HotKeyManager(
             onToggle: { [weak self] in DispatchQueue.main.async { self?.toggleStickman() } },
@@ -51,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         rightClickMonitors.removeAll()
         ScreenShareMonitor.shared.stop()
+        StickmanBlocker.shared.stop()
         if let screenShareObserver { NotificationCenter.default.removeObserver(screenShareObserver) }
         WebsiteBlockerService.shared.stop()
         ScreenEffectsOverlayController.shared.stop()
@@ -60,12 +72,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
     }
 
+    /// Option+B: Stickman ducks into the notch, and comes back out on the next press.
     private func toggleStickman() {
-        if isStickmanVisible, stickmanWindowController?.isHiddenForScreenShare != true {
-            hideStickman()
-        } else {
+        guard let controller = stickmanWindowController, isStickmanVisible, !controller.isHiddenForScreenShare else {
             showStickman()
+            return
         }
+        controller.toggleNotchHide()
+    }
+
+    /// Keeps a single Stickman. The copy launchd keeps alive for Stickman Blocker wins;
+    /// a copy opened from Finder or the Dock hands off to it and exits.
+    private func handOffToRunningCopy() -> Bool {
+        let identifier = Bundle.main.bundleIdentifier ?? "com.chaymore.Stickman"
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        guard !others.isEmpty else { return false }
+        if StickmanBlocker.shared.launchedByAgent {
+            others.forEach { $0.terminate() }
+            return false
+        }
+        others.first?.activate(options: [])
+        NSApp.terminate(nil)
+        return true
     }
 
     private func showStickman() {
@@ -84,9 +113,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            if !ScreenShareMonitor.shared.isSharing { self.showsDuringCurrentShare = false }
-            self.applyScreenShareState()
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if !ScreenShareMonitor.shared.isSharing { self.showsDuringCurrentShare = false }
+                self.applyScreenShareState()
+            }
         }
         ScreenShareMonitor.shared.start()
     }
@@ -96,11 +127,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             && StickmanSettingsPanelView.hidesDuringScreenShare
             && !showsDuringCurrentShare
         stickmanWindowController?.setHiddenForScreenShare(hide)
-    }
-
-    private func hideStickman() {
-        stickmanWindowController?.hideStickman()
-        isStickmanVisible = false
     }
 
     private func installRightClickTracking() {
@@ -164,15 +190,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let agentItem = menu.addItem(withTitle: "Background Agents", action: #selector(showAgentsFromMenu), keyEquivalent: "")
         agentStatusMenuItem = agentItem
         menu.addItem(.separator())
+        let blockerHeader = menu.addItem(withTitle: "Stickman Blocker", action: nil, keyEquivalent: "")
+        blockerHeader.isEnabled = false
+        blockerStatusMenuItem = disabledItem(in: menu, indent: true)
+        blockerScheduleMenuItem = disabledItem(in: menu, indent: true)
+        blockerAllowanceMenuItems = [disabledItem(in: menu, indent: true), disabledItem(in: menu, indent: true)]
+        menu.addItem(withTitle: "Night Routine…", action: #selector(openRoutineFromMenu), keyEquivalent: "")
+        menu.addItem(withTitle: "Protected Settings…", action: #selector(openProtectedSettingsFromMenu), keyEquivalent: "")
+        blockerInstallMenuItem = menu.addItem(withTitle: "Install Blocker Helper…", action: #selector(installBlockerFromMenu), keyEquivalent: "")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettingsFromMenu), keyEquivalent: ",")
         menu.addItem(withTitle: "Permissions…", action: #selector(openPermissionsFromMenu), keyEquivalent: "")
         menu.addItem(withTitle: "Connections…", action: #selector(openConnectionsFromMenu), keyEquivalent: "")
-        menu.addItem(withTitle: "Hide Stickman", action: #selector(hideStickmanFromMenu), keyEquivalent: "")
+        notchMenuItem = menu.addItem(withTitle: "Hide in Notch", action: #selector(toggleNotchFromMenu), keyEquivalent: "")
         let stopFighting = menu.addItem(withTitle: "Stop Fighting", action: #selector(stopFightingFromMenu), keyEquivalent: "")
         stopFighting.isHidden = true
         stopFightingMenuItem = stopFighting
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Stickman", action: #selector(quitFromMenu), keyEquivalent: "q")
+        keepsRunningMenuItem = disabledItem(in: menu, indent: false)
+        keepsRunningMenuItem?.title = "Stickman Blocker keeps Stickman running."
+        quitMenuItem = menu.addItem(withTitle: "Quit Stickman", action: #selector(quitFromMenu), keyEquivalent: "q")
         for menuItem in menu.items where menuItem.action != nil { menuItem.target = self }
         item.menu = menu
         statusItem = item
@@ -185,7 +222,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         shareStatusMenuItem?.isHidden = !hiddenForShare
         showMenuItem?.title = hiddenForShare ? "Show Stickman Anyway" : "Show Stickman"
         stopFightingMenuItem?.isHidden = StickmanModeController.shared.mode != .sparring
+        notchMenuItem?.title = stickmanWindowController?.isTuckedInNotch == true ? "Come Out of the Notch" : "Hide in Notch"
+
+        let blocker = StickmanBlocker.shared
+        blockerStatusMenuItem?.title = blocker.statusTitle
+        blockerScheduleMenuItem?.title = blocker.scheduleLine ?? ""
+        blockerScheduleMenuItem?.isHidden = blocker.scheduleLine == nil
+        let allowances = blocker.allowanceLines
+        for (index, item) in blockerAllowanceMenuItems.enumerated() {
+            item.isHidden = !allowances.indices.contains(index)
+            item.title = allowances.indices.contains(index) ? allowances[index] : ""
+        }
+        blockerInstallMenuItem?.title = blocker.needsMove ? "Move Blocker into Stickman…"
+            : (blocker.isInstalled ? "Repair Blocker Helper…" : "Install Blocker Helper…")
+        quitMenuItem?.isHidden = blocker.keepsStickmanRunning
+        keepsRunningMenuItem?.isHidden = !blocker.keepsStickmanRunning
     }
+
+    private func disabledItem(in menu: NSMenu, indent: Bool) -> NSMenuItem {
+        let item = menu.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        item.indentationLevel = indent ? 1 : 0
+        return item
+    }
+
+    @objc private func openRoutineFromMenu() { StickmanBlocker.shared.showRoutine() }
+
+    @objc private func openProtectedSettingsFromMenu() { StickmanBlocker.shared.showProtectedSettings() }
+
+    @objc private func installBlockerFromMenu() { StickmanBlocker.shared.installHelper() }
+
+    @objc private func toggleNotchFromMenu() { toggleStickman() }
 
     @objc private func stopFightingFromMenu() {
         StickmanModeController.shared.setMode(.peaceful, reason: "menu")
@@ -195,9 +262,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         summonIfNeeded()
     }
 
-    /// Shows Stickman if he is hidden by the user or by a screen share.
+    /// Shows Stickman if he is hidden by the user, by a screen share, or in the notch.
     private func summonIfNeeded() {
-        if !isStickmanVisible || stickmanWindowController?.isHiddenForScreenShare == true { showStickman() }
+        if !isStickmanVisible || stickmanWindowController?.isHiddenForScreenShare == true
+            || stickmanWindowController?.isTuckedInNotch == true {
+            showStickman()
+        }
     }
 
     @objc private func openChatFromMenu() { openMenu() }
@@ -228,8 +298,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         summonIfNeeded()
         stickmanWindowController?.openConnections()
     }
-
-    @objc private func hideStickmanFromMenu() { hideStickman() }
 
     @objc private func quitFromMenu() { NSApp.terminate(nil) }
 

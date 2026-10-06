@@ -78,7 +78,26 @@ if let previewFlagIndex = CommandLine.arguments.firstIndex(of: "--render-referen
     }
 }
 
+if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-block-page") {
+    let pathIndex = flagIndex + 1
+    let outputPath = CommandLine.arguments.indices.contains(pathIndex) ? CommandLine.arguments[pathIndex] : "blocked-by-stickman.html"
+    MainActor.assumeIsolated { StickmanBlockPage.prepare() }
+    let html = StickmanBlockPage.html(
+        site: "reddit.com",
+        detail: "You drew this line on purpose. Stickman's holding it.",
+        footnote: "Stickman Blocker · always on for this site"
+    )
+    do {
+        try html.write(toFile: outputPath, atomically: true, encoding: .utf8)
+        print("Rendered block page: \(outputPath)")
+        exit(0)
+    } catch {
+        fputs("Failed to render block page: \(error)\n", stderr)
+        exit(1)
+    }
+}
+
 let app = NSApplication.shared
-let delegate = AppDelegate()
+let delegate = MainActor.assumeIsolated { AppDelegate() }
 app.delegate = delegate
 app.run()

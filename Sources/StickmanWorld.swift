@@ -465,7 +465,8 @@ final class StickmanLocomotion {
                 position.x = screen.maxX - margin
                 velocity.dx = -abs(velocity.dx) * 0.35
             }
-            if position.y + tuning.bodyHeight > screen.maxY {
+            // Only a rising body hits the ceiling, so he can drop in from above the screen.
+            if velocity.dy > 0, position.y + tuning.bodyHeight > screen.maxY {
                 position.y = screen.maxY - tuning.bodyHeight
                 velocity.dy = min(0, -velocity.dy * 0.2)
             }

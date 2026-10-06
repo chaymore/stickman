@@ -21,12 +21,12 @@ The app is native Swift and AppKit. Its black stick figure is procedurally drawn
 - Calendar summaries, meeting nudges, and optional proactive study preparation
 - Permission center with independent grants for sensitive capabilities
 - Configurable Canvas tenant with Keychain-backed credentials
-- Temporary focus sessions and an optional bedtime browser guard
+- Stickman Blocker: a protected, schedule-based website blocker with a "Blocked by Stickman" page, plus temporary focus sessions and a softer bedtime guard
 - Universal app builds for Apple Silicon and Intel Macs
 
 ## Requirements
 
-- macOS 12 or newer
+- macOS 13 or newer
 - Xcode 16 Command Line Tools or newer (`xcode-select --install`) when building from source
 - An OpenAI API key for AI and voice features
 - Google Chrome only for Chrome-specific actions; the rest of Stickman works without it
@@ -62,7 +62,7 @@ export STICKMAN_OPENROUTER_MODEL=google/gemini-2.5-flash
 | Start sparring | `Option`+triple-click Stickman |
 | Send him somewhere | `Option`+right-click a window to climb onto it, or empty space to walk there |
 | Close the panel | `Esc` |
-| Show or hide | `Option+B` |
+| Hide in the notch, or bring him back out | `Option+B` |
 | Quick screen-aware assist | `Option+Space` |
 | End sparring | `Option+F`, **Stop Fighting** in the menu bar, or circle Stickman with the cursor |
 | Open chat menu | `Control+-` |
@@ -73,6 +73,12 @@ After the same foreground window stays active for a minute, Stickman walks or le
 Left alone, he strolls along his ledge, hops between windows, and fidgets. After a few quiet minutes he sits down, then falls asleep. Turn off wandering in **Settings → General**.
 
 When Zoom, Meet, Teams, or a screen recorder starts capturing your screen, Stickman and his panel fade out. They come back a couple of seconds after the capture stops. Choose **Show Stickman Anyway** from the menu bar to keep him visible for the rest of that share, or turn the behavior off in **Settings → General**. macOS has no public API for this, so Stickman reads the window server's capture flag (the one behind the purple recording icon) through a private CoreGraphics call. It reads only whether a capture is running, never what is captured. If a future macOS removes the call, the setting turns itself off.
+
+## Stickman Blocker
+
+Stickman Blocker is the protected website blocker that used to be NightLock. A root helper enforces it through `/etc/hosts`, so quitting the app doesn't lift it, and changing the schedule takes the recovery key you generated at install. Blocked tabs land on a "Blocked by Stickman" page where he squares up and throws a jab.
+
+Install it from Stickman's menu bar menu (**Install Blocker Helper…**) or with `./stickman --install-blocker`. Once it's installed, Stickman starts at login and has no Quit command; press `Option+B` to tuck him into the notch instead. See [Blocker/README.md](Blocker/README.md) and [Blocker recovery](docs/BLOCKER_RECOVERY.md).
 
 ## Claude Code
 

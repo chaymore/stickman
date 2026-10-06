@@ -727,6 +727,35 @@ final class StickmanView: NSView {
         needsDisplay = true
     }
 
+    // MARK: Vector export
+
+    /// The current pose as SVG strokes in the 160-point design space, for web pages.
+    func skeletonSVG() -> String {
+        let figure = skeleton
+        func point(_ p: CGPoint) -> String { String(format: "%.1f,%.1f", p.x, p.y) }
+        let limbs = [
+            [figure.neck, figure.hip],
+            [figure.neck, figure.leftElbow, figure.leftHand],
+            [figure.neck, figure.rightElbow, figure.rightHand],
+            [figure.hip, figure.leftKnee, figure.leftFoot],
+            [figure.hip, figure.rightKnee, figure.rightFoot]
+        ]
+        let polylines = limbs.map { "<polyline points=\"\($0.map(point).joined(separator: " "))\"/>" }.joined()
+        return polylines + String(format: "<circle cx=\"%.1f\" cy=\"%.1f\" r=\"%.1f\"/>", figure.head.x, figure.head.y, Bone.headRadius)
+    }
+
+    /// Guard stance at two points in its bounce, then a jab at full extension.
+    static func fightingPoseFrames() -> [String] {
+        let view = StickmanView(frame: NSRect(x: 0, y: 0, width: StickmanMetrics.characterSize, height: StickmanMetrics.characterSize))
+        view.setPreviewState(.sparring, time: 0.2)
+        let guardHigh = view.skeletonSVG()
+        view.setPreviewState(.sparring, time: 0.6)
+        let guardLow = view.skeletonSVG()
+        view.setPreviewState(.punch, time: 0.36)
+        let jab = view.skeletonSVG()
+        return [guardHigh, guardLow, jab]
+    }
+
     // MARK: State selection
 
     private var isLanding: Bool { time - landingStartedAt < landingDuration }
@@ -1300,13 +1329,14 @@ final class StickmanView: NSView {
 
     private func combatPose() -> StickPose {
         let bounce = CGFloat(sin(time * 7.8)) * 2.2
+        // Boxer's stance: staggered feet, bent knees, lead fist out front, rear fist at the chin.
         var guardPose = StickPose(
-            head: CGPoint(x: 83, y: 29 + bounce), neck: CGPoint(x: 78, y: 51 + bounce), hip: CGPoint(x: 76, y: 93 + bounce),
-            leftElbow: CGPoint(x: 61, y: 59 + bounce), leftHand: CGPoint(x: 72, y: 48 + bounce),
-            rightElbow: CGPoint(x: 98, y: 59 + bounce), rightHand: CGPoint(x: 91, y: 45 + bounce),
-            leftKnee: CGPoint(x: 61, y: 118), leftFoot: CGPoint(x: 50, y: 145),
-            rightKnee: CGPoint(x: 96, y: 116), rightFoot: CGPoint(x: 106, y: 145),
-            headTilt: 0.08, bodyLean: 0.1
+            head: CGPoint(x: 86, y: 31 + bounce), neck: CGPoint(x: 82, y: 53 + bounce), hip: CGPoint(x: 76, y: 99 + bounce * 0.6),
+            leftElbow: CGPoint(x: 68, y: 70 + bounce), leftHand: CGPoint(x: 92, y: 56 + bounce),
+            rightElbow: CGPoint(x: 100, y: 68 + bounce), rightHand: CGPoint(x: 112, y: 52 + bounce),
+            leftKnee: CGPoint(x: 58, y: 121), leftFoot: CGPoint(x: 46, y: 145),
+            rightKnee: CGPoint(x: 101, y: 119), rightFoot: CGPoint(x: 110, y: 145),
+            headTilt: 0.1, bodyLean: 0.12
         )
 
         let elapsed = max(0, time - combatMoveStartedAt)
@@ -1321,8 +1351,8 @@ final class StickmanView: NSView {
             guardPose.head.x -= strike * 5
             guardPose.neck.x += strike * 7
             guardPose.hip.x += strike * 2
-            guardPose.rightElbow = CGPoint(x: 106 + strike * 10, y: 54)
-            guardPose.rightHand = CGPoint(x: 100 + strike * 42, y: 49)
+            guardPose.rightElbow = CGPoint(x: 104 + strike * 16, y: 62 - strike * 8)
+            guardPose.rightHand = CGPoint(x: 112 + strike * 38, y: 52 - strike * 2)
             return guardPose
         case .kick:
             guardPose.neck.x -= strike * 6

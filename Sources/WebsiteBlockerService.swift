@@ -292,7 +292,7 @@ final class WebsiteBlockerService {
     }
 
     private var nightLockStatusFragment: String {
-        NightLockBridge.shared.shortStatus
+        StickmanBlocker.statusSummary
     }
 
     private var domainList: String {
@@ -553,49 +553,11 @@ private final class BlockPageServer {
     }
 
     private func html(for domain: String) -> String {
-        let escapedDomain = escapeHTML(domain)
-        return """
-        <!doctype html>
-        <html lang="en">
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>Stickman says bedtime</title>
-          <style>
-            :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif; }
-            body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #101114; color: #f8f8f8; }
-            main { width: min(680px, calc(100vw - 40px)); text-align: center; }
-            .stickman { width: 132px; height: 132px; margin: 0 auto 28px; border-radius: 52% 52% 46% 46%; background: #f7f7f2; position: relative; box-shadow: 0 24px 70px rgba(0,0,0,.45); }
-            .stickman:before, .stickman:after { content: ""; position: absolute; top: 48px; width: 18px; height: 18px; border-radius: 50%; background: #101114; }
-            .stickman:before { left: 38px; }
-            .stickman:after { right: 38px; }
-            .mouth { position: absolute; left: 48px; top: 78px; width: 36px; height: 16px; border-bottom: 5px solid #101114; border-radius: 0 0 40px 40px; }
-            h1 { font-size: clamp(38px, 7vw, 76px); line-height: .92; margin: 0 0 22px; letter-spacing: 0; }
-            p { font-size: clamp(18px, 2.3vw, 24px); line-height: 1.45; color: rgba(248,248,248,.78); margin: 0 auto 16px; max-width: 560px; }
-            strong { color: white; }
-            .note { margin-top: 28px; font-size: 16px; color: rgba(248,248,248,.56); }
-          </style>
-        </head>
-        <body>
-          <main>
-            <div class="stickman"><div class="mouth"></div></div>
-            <h1>Stickman has intercepted the scroll portal.</h1>
-            <p><strong>\(escapedDomain)</strong> has been tucked into bed until 6AM.</p>
-            <p>Ask Stickman for a brief unlock if this is genuinely mission-critical. He accepts good reasons and suspiciously specific tutorial emergencies.</p>
-            <p class="note">Tiny bedtime wall. Big tomorrow-you energy.</p>
-          </main>
-        </body>
-        </html>
-        """
-    }
-
-    private func escapeHTML(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
+        StickmanBlockPage.html(
+            site: domain,
+            detail: "Stickman's guarding your focus right now. Ask him in chat if it's genuinely urgent.",
+            footnote: nil
+        )
     }
 }
 

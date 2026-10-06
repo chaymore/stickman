@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 import NightLockCore
 
-final class SettingsWindowController: NSWindowController {
+final class BlockerSettingsWindowController: NSWindowController {
     private let enabledCheckbox = NSButton(checkboxWithTitle: "Enforcement enabled", target: nil, action: nil)
     private let startPicker = NSDatePicker()
     private let endPicker = NSDatePicker()
@@ -17,7 +17,7 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "NightLock Protected Settings"
+        window.title = "Stickman Blocker Protected Settings"
         window.center()
         super.init(window: window)
         configureUI()
@@ -89,7 +89,7 @@ final class SettingsWindowController: NSWindowController {
 
     private func loadCurrentSettings() {
         guard let config = try? NightLockFiles.loadConfig() else {
-            statusLabel.stringValue = "Install the NightLock system helper first."
+            statusLabel.stringValue = "Install the Stickman Blocker helper first."
             return
         }
         enabledCheckbox.state = config.enabled ? .on : .off

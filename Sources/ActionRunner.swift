@@ -222,7 +222,7 @@ final class ActionRunner {
         }
 
         if matches(text, pattern: #"(?i)^(?:show\s+)?nightlock(?:\s+status)?[?!. ]*$"#) {
-            return ActionResult(userVisibleMessage: NightLockBridge.shared.detailedStatus)
+            return ActionResult(userVisibleMessage: StickmanBlocker.statusSummary)
         }
         return nil
     }

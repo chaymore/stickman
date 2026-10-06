@@ -22,6 +22,9 @@ jobs:
           codesign --verify --deep --strict dist/Stickman.app
           test "$(lipo -archs dist/Stickman.app/Contents/MacOS/StickmanBinary)" = "x86_64 arm64" || test "$(lipo -archs dist/Stickman.app/Contents/MacOS/StickmanBinary)" = "arm64 x86_64"
           plutil -lint dist/Stickman.app/Contents/Info.plist
+          for tool in StickmanBlockerDaemon StickmanBlockerInstaller stickman-blocker-recover; do
+            test -x "dist/Stickman.app/Contents/MacOS/$tool"
+          done
       - name: Package test artifact
         run: STICKMAN_SKIP_BUILD=1 ./scripts/package-release.sh
       - uses: actions/upload-artifact@v4
