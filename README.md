@@ -96,9 +96,17 @@ Stickman can hand coding work to Claude Code and tap you when it's done. It runs
 | --- | --- |
 | Start a background session | `/claude @project fix the failing test`, or "have Claude fix the failing test in project" |
 | Run it in the cloud instead | `/cloud @project write tests for the parser`, or add "in the cloud" |
+| Have Claude use your apps | `/computer add my 3pm dentist appointment to Calendar`, or "use my computer to…" |
 | See sessions | Click the terminal icon in the chat header, type `/sessions`, or pick **Claude Code Sessions** from the menu bar |
 
 Without a project name, Stickman uses the project named in the window you're looking at, then your default project. Background sessions run with the permission level you pick in settings. A session that needs approval waits, Stickman waves at you, and **Open** attaches it in Ghostty or Terminal. When a session finishes, he hops and posts a notification.
+
+**Computer use.** `/computer` and "use my computer to…" start a background session on Opus with Stickman's computer-use tools: `list_apps`, `open_app`, `get_app_state`, `click`, `type_text`, `press_key`, `scroll`, `set_value`, `perform_action`, and `drag`. Claude reads each app through its accessibility outline plus a screenshot of its front window, acts on numbered controls, and gets the updated state back after every action. The tools come from `stickman-computer-use`, an MCP server inside the app bundle that relays each call to the running app over a private socket, so the work happens under Stickman's own permissions.
+
+- Turn on **Accessibility** and **Screen Recording** for Stickman (Settings → Claude Code shows both). Ad-hoc signed builds change identity on every rebuild, so after reinstalling you may need to remove Stickman from both lists and add it again.
+- Claude asks before it touches each new app: **Always Allow**, **Allow Once**, or **Don't Allow**. Terminals, password managers, Keychain Access, System Settings, and Stickman itself are off-limits, and password fields are never typed into.
+- While Claude works, a banner at the top of the screen says which app it's using. Press **esc** to stop it.
+- Claude Code only starts background sessions in folders your personal profile trusts. The first time you use a project, Stickman opens a terminal there: accept the trust prompt, type `/exit`, and ask again.
 
 Stickman checks the profile's sign-in only when you open the Claude Code tab or press refresh. Claude Code has an open bug where frequent sign-in checks can expire a profile's login ([claude-code#95822](https://github.com/anthropics/claude-code/issues/95822)). If a session reports "Login expired", sign in again from the same tab.
 

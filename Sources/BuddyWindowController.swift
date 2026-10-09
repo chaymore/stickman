@@ -126,6 +126,13 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             guard let self, let session = notification.userInfo?["session"] as? ClaudeCodeSession else { return }
             self.reactToClaudeUpdate(session, needsAttention: notification.userInfo?["needsAttention"] as? Bool ?? false)
         })
+        observers.append(center.addObserver(forName: .stickmanComputerUseDidChange, object: nil, queue: .main) { [weak self] notification in
+            guard let self else { return }
+            self.reactToComputerUse(
+                active: notification.userInfo?["active"] as? Bool ?? false,
+                stopped: notification.userInfo?["stopped"] as? Bool ?? false
+            )
+        })
     }
 
     // MARK: Showing and hiding
@@ -286,6 +293,18 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         }
     }
 
+    /// Stickman looks busy while Claude drives the computer, and startled when the user stops it.
+    private func reactToComputerUse(active: Bool, stopped: Bool) {
+        if active {
+            stickmanView.setActivity(.working)
+        } else {
+            stickmanView.setActivity(.quiet)
+            guard stopped, isShown, !isHiddenForScreenShare, !isTuckedInNotch, notchMove == nil else { return }
+            stickmanView.showErrorMoment()
+        }
+        markInteraction()
+    }
+
     func openPermissions() {
         StickmanModeController.shared.setMode(.peaceful, reason: "permissions menu")
         settingsReturnsToChat = false
@@ -407,9 +426,8 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         case .landed(let impact):
             lastWorldScanAt = 0
             if impact > 160 { stickmanView.playLanding(impact: impact) }
-            if impact > 1500, StickmanModeController.shared.mode == .peaceful {
-                let feet = locomotion.position
-                ScreenEffectsOverlayController.shared.showImpact(at: feet, strength: min(1.2, impact / 2600))
+            if impact > 450 {
+                ScreenEffectsOverlayController.shared.showLandingDust(at: locomotion.position, strength: impact / 1300)
             }
             if !locomotion.isBusy { stillSince = now }
         case .arrived:
@@ -666,9 +684,8 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
 
         let notch = Self.notchGeometry()
         let top = CGPoint(x: notch.rect.midX, y: notch.screenTop + 24)
-        // Hang with his head still inside the notch and his legs dangling out.
-        let hang = CGPoint(x: notch.rect.midX, y: notch.rect.minY - Self.handReach + 16)
-        notchMove = NotchMove(phase: .emerge, startedAt: now, duration: 0.34, from: top, to: hang, aboveScreen: top.y)
+        let hang = CGPoint(x: notch.rect.midX, y: notch.rect.minY - Self.handReach)
+        notchMove = NotchMove(phase: .emerge, startedAt: now, duration: 0.45, from: top, to: hang, aboveScreen: top.y)
         place(window: window, at: top)
         window.alphaValue = 1
         window.ignoresMouseEvents = false
@@ -695,14 +712,16 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             let t = CGFloat(min(elapsed, move.duration))
             position = CGPoint(x: move.from.x + move.launch.dx * t, y: move.from.y + move.launch.dy * t - 0.5 * gravity * t * t)
             motion = .airborne(velocity: CGVector(dx: move.launch.dx, dy: move.launch.dy - gravity * t), planned: true)
+        case .grab:
+            motion = .hanging
         case .climb:
             position = SMath.mix(move.from, move.to, progress * progress)
-            motion = .airborne(velocity: CGVector(dx: 0, dy: 900), planned: true)
+            motion = .hanging
         case .emerge:
             position = SMath.mix(move.from, move.to, SMath.easeOutCubic(progress))
-            motion = .held(velocity: .zero)
+            motion = .hanging
         case .hang:
-            motion = .held(velocity: CGVector(dx: CGFloat(sin(elapsed * 7)) * 120, dy: 0))
+            motion = .hanging
         }
 
         scriptedPosition = position
@@ -721,12 +740,15 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             move.launch = CGVector(dx: (move.to.x - move.from.x) / CGFloat(duration), dy: launchSpeed)
             notchMove = move
         case .leap:
-            notchMove = NotchMove(phase: .climb, startedAt: now, duration: 0.4, from: position, to: CGPoint(x: position.x, y: move.aboveScreen), aboveScreen: move.aboveScreen)
+            // Catch the notch's bottom edge, hang for a beat, then pull up into it.
+            notchMove = NotchMove(phase: .grab, startedAt: now, duration: 0.22, from: position, to: position, aboveScreen: move.aboveScreen)
+        case .grab:
+            notchMove = NotchMove(phase: .climb, startedAt: now, duration: 0.42, from: position, to: CGPoint(x: position.x, y: move.aboveScreen), aboveScreen: move.aboveScreen)
         case .climb:
             notchMove = nil
             finishTuck()
         case .emerge:
-            notchMove = NotchMove(phase: .hang, startedAt: now, duration: 0.4, from: position, to: position, aboveScreen: move.aboveScreen)
+            notchMove = NotchMove(phase: .hang, startedAt: now, duration: 1.0, from: position, to: position, aboveScreen: move.aboveScreen)
         case .hang:
             notchMove = nil
             scriptedPosition = nil
@@ -767,8 +789,8 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         if window.frame.origin != origin { window.setFrameOrigin(origin) }
     }
 
-    /// Height from his feet to his raised hands, so they reach the bottom of the notch.
-    private static let handReach: CGFloat = 96
+    /// Height from his feet to his raised hands. Puts his grip just inside the notch's bottom edge.
+    private static let handReach: CGFloat = 94
 
     /// The camera notch on the built-in display, or a notch-sized spot at the top center
     /// of the main screen's menu bar when no display has one.
@@ -990,6 +1012,7 @@ private struct NotchMove {
     enum Phase {
         case crouch
         case leap
+        case grab
         case climb
         case emerge
         case hang
@@ -1004,7 +1027,7 @@ private struct NotchMove {
     var aboveScreen: CGFloat
     var launch = CGVector.zero
 
-    var isHiding: Bool { [.crouch, .leap, .climb].contains(phase) }
+    var isHiding: Bool { [.crouch, .leap, .grab, .climb].contains(phase) }
 }
 
 private struct PerchTarget {

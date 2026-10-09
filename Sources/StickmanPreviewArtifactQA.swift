@@ -9,14 +9,14 @@ enum StickmanPreviewArtifactQA {
                 label: "Avatar states PNG",
                 url: previewRoot.appendingPathComponent("avatar-states.png"),
                 expectedWidth: 1062,
-                expectedHeight: 4826,
+                expectedHeight: 5016,
                 expectedFrameCount: 1
             ),
             ImageCheck(
                 label: "Avatar states GIF",
                 url: previewRoot.appendingPathComponent("avatar-states.gif"),
                 expectedWidth: 1062,
-                expectedHeight: 4826,
+                expectedHeight: 5016,
                 expectedFrameCount: 36
             ),
             ImageCheck(

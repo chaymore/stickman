@@ -20,9 +20,9 @@ jobs:
       - name: Verify bundle
         run: |
           codesign --verify --deep --strict dist/Stickman.app
-          test "$(lipo -archs dist/Stickman.app/Contents/MacOS/StickmanBinary)" = "x86_64 arm64" || test "$(lipo -archs dist/Stickman.app/Contents/MacOS/StickmanBinary)" = "arm64 x86_64"
+          test "$(lipo -archs dist/Stickman.app/Contents/MacOS/Stickman)" = "x86_64 arm64" || test "$(lipo -archs dist/Stickman.app/Contents/MacOS/Stickman)" = "arm64 x86_64"
           plutil -lint dist/Stickman.app/Contents/Info.plist
-          for tool in StickmanBlockerDaemon StickmanBlockerInstaller stickman-blocker-recover; do
+          for tool in StickmanBlockerDaemon StickmanBlockerInstaller stickman-blocker-recover stickman-computer-use; do
             test -x "dist/Stickman.app/Contents/MacOS/$tool"
           done
       - name: Package test artifact

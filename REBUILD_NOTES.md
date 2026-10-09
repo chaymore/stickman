@@ -16,6 +16,7 @@ Sparring never synthesizes clicks, edits documents, closes apps, or changes anot
 - `BuddyWindowController.swift`: the 60 fps frame loop, drag and throw, idle wandering and resting, window perching, and sparring knockback.
 - `StickmanCompanionPanel.swift` and `StickmanStyle.swift`: the floating glass panel beside Stickman and the shared native styling.
 - `ClaudeCodeService.swift`, `ClaudeCodeCommand.swift`, `ClaudeSessionsView.swift`, and `ClaudeCodeSettingsView.swift`: Claude Code background and cloud sessions on a separate `CLAUDE_CONFIG_DIR` profile, chat and voice commands, the sessions list, and settings.
+- `ComputerUseService.swift`, `ComputerUseEngine.swift`, `ComputerUseOverlay.swift`, and `ComputerUse/`: Claude Code computer use. The bundled `stickman-computer-use` MCP relay forwards tool calls over a peer-checked Unix socket; the app approves apps per use, outlines the accessibility tree with numbered elements, screenshots the front window, posts tagged input events, and stops on esc.
 - `ScreenShareMonitor.swift`: debounced screen-capture detection through the private `CGSIsScreenWatcherPresent`, so Stickman hides during screen shares.
 - `CombatDirector.swift`: cursor velocity, hit detection, attack selection, cursor recoil, and truce-circle recognition.
 - `ScreenEffectsOverlay.swift`: per-display transparent panels for impacts, slashes, tethers, transitions, and helper annotations.

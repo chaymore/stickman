@@ -324,7 +324,7 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
         messages.append(ChatMessage(role: .assistant, content: ""))
         let index = messages.count - 1
         isThinking = true
-        setStatus(request.runsInCloud ? "Starting a cloud session…" : "Starting Claude Code…", tone: .busy)
+        setStatus(request.runsInCloud ? "Starting a cloud session…" : request.usesComputer ? "Starting Claude with computer use…" : "Starting Claude Code…", tone: .busy)
         renderMessages()
         let windowTitle = DesktopContextProvider.shared.currentContext().windowTitle
 
@@ -340,8 +340,12 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
                     reply = "Started a cloud session for **\(name)** in `\(project.name)`."
                     reply += url.map { " [Open it on claude.ai](\($0.absoluteString))" } ?? " You'll find it at claude.ai/code."
                 } else {
-                    _ = try await service.startBackground(task: task, in: project)
-                    reply = "Started **\(name)** in `\(project.name)`. I'll tell you when it's done."
+                    _ = try await service.startBackground(task: task, in: project, usesComputer: request.usesComputer)
+                    if request.usesComputer {
+                        reply = "Started **\(name)** on Opus with computer use. I'll ask before Claude touches a new app, and you can press esc anytime to stop it."
+                    } else {
+                        reply = "Started **\(name)** in `\(project.name)`. I'll tell you when it's done."
+                    }
                     StickmanTaskAnimationController.play(.spawnAgent)
                 }
             } catch {
@@ -877,7 +881,8 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
                 explicitProject: project.isEmpty ? nil : project,
                 trailingProject: nil,
                 taskWithoutTrailingProject: nil,
-                runsInCloud: arguments["cloud"] as? Bool ?? false
+                runsInCloud: arguments["cloud"] as? Bool ?? false,
+                usesComputer: arguments["computer_use"] as? Bool ?? false
             )
             if !project.isEmpty, ClaudeCodeService.shared.project(named: project) == nil {
                 let known = ClaudeCodeService.shared.projects.map(\.name).joined(separator: ", ")
