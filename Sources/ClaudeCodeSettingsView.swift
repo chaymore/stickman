@@ -24,6 +24,20 @@ final class ClaudeCodeSettingsView: NSView {
     private let importButton = NSButton(title: "Import from Claude Code", target: nil, action: nil)
     private var projectRows: [NSView] = []
 
+    private let computerHeader = ClaudeSettingsHeader("Computer use")
+    private let computerCard = ClaudeDividedCardView(dividers: [52])
+    private let accessibilityRow = ComputerUsePermissionRow(
+        symbol: "hand.point.up.left",
+        title: "Accessibility",
+        detail: "Lets Claude read and press controls in apps you approve."
+    )
+    private let screenRow = ComputerUsePermissionRow(
+        symbol: "macwindow",
+        title: "Screen Recording",
+        detail: "Lets Claude see the window it's working in."
+    )
+    private var appRows: [NSView] = []
+
     private let usageLabel = NSTextField(wrappingLabelWithString: "")
     private var observers: [NSObjectProtocol] = []
 
@@ -34,6 +48,7 @@ final class ClaudeCodeSettingsView: NSView {
             self?.rebuildProjects()
         })
         rebuildProjects()
+        rebuildComputerUse()
         showAccount(ClaudeCodeService.shared.authStatus)
     }
 
@@ -48,6 +63,7 @@ final class ClaudeCodeSettingsView: NSView {
     func refresh() {
         terminalPopup.selectItem(at: ClaudeCodeService.Terminal.allCases.firstIndex(of: ClaudeCodeService.shared.terminal) ?? 0)
         permissionPopup.selectItem(at: ClaudeCodeService.PermissionMode.allCases.firstIndex(of: ClaudeCodeService.shared.permissionMode) ?? 0)
+        rebuildComputerUse()
         if let status = ClaudeCodeService.shared.authStatus {
             showAccount(status)
         } else {
@@ -89,7 +105,19 @@ final class ClaudeCodeSettingsView: NSView {
             rowY += 44
         }
         projectsCard.frame = NSRect(x: side, y: y, width: width, height: rowY + 4)
-        y = projectsCard.frame.maxY + 14
+        y = projectsCard.frame.maxY + 18
+
+        computerHeader.frame = NSRect(x: side + 4, y: y, width: width, height: 16)
+        y += 22
+        accessibilityRow.frame = NSRect(x: 0, y: 0, width: width, height: 52)
+        screenRow.frame = NSRect(x: 0, y: 52, width: width, height: 52)
+        var appY: CGFloat = 104
+        for row in appRows {
+            row.frame = NSRect(x: 0, y: appY, width: width, height: 40)
+            appY += 40
+        }
+        computerCard.frame = NSRect(x: side, y: y, width: width, height: appY + 2)
+        y = computerCard.frame.maxY + 14
 
         let usageHeight = usageLabel.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: width - 8, height: 300)).height ?? 40
         usageLabel.frame = NSRect(x: side + 4, y: y, width: width - 8, height: ceil(usageHeight))
@@ -149,12 +177,18 @@ final class ClaudeCodeSettingsView: NSView {
         usageLabel.font = .systemFont(ofSize: 11.5)
         usageLabel.textColor = StickmanStyle.secondaryText
         usageLabel.attributedStringValue = StickmanMarkdown.render(
-            "Ask from chat with `/claude @project task`, or say \"have Claude fix the login bug in project.\" Use `/cloud` to run it on Anthropic's servers instead. Without a project name, Stickman uses the project in the window you're looking at, then your default.",
+            "Ask from chat with `/claude @project task`, or say \"have Claude fix the login bug in project.\" Use `/cloud` to run it on Anthropic's servers instead. Without a project name, Stickman uses the project in the window you're looking at, then your default.\n\nFor work in your apps, use `/computer task` or say \"use my computer to…\" Claude runs on Opus, asks before it touches each new app, and stops when you press esc.",
             font: .systemFont(ofSize: 11.5),
             color: .secondaryLabelColor
         )
 
-        [accountHeader, accountCard, projectsHeader, projectsCard, usageLabel].forEach(content.addSubview)
+        accessibilityRow.button.target = self
+        accessibilityRow.button.action = #selector(grantAccessibility)
+        screenRow.button.target = self
+        screenRow.button.action = #selector(grantScreenRecording)
+        [accessibilityRow, screenRow].forEach(computerCard.addSubview)
+
+        [accountHeader, accountCard, projectsHeader, projectsCard, computerHeader, computerCard, usageLabel].forEach(content.addSubview)
     }
 
     // MARK: Account
@@ -220,6 +254,44 @@ final class ClaudeCodeSettingsView: NSView {
         let modes = ClaudeCodeService.PermissionMode.allCases
         guard modes.indices.contains(permissionPopup.indexOfSelectedItem) else { return }
         ClaudeCodeService.shared.permissionMode = modes[permissionPopup.indexOfSelectedItem]
+    }
+
+    // MARK: Computer use
+
+    @objc private func grantAccessibility() {
+        PermissionCenterService.shared.request(.accessibility)
+        PermissionCenterService.shared.openSystemSettings(for: .accessibility)
+    }
+
+    @objc private func grantScreenRecording() {
+        PermissionCenterService.shared.request(.screenRecording)
+        PermissionCenterService.shared.openSystemSettings(for: .screenRecording)
+    }
+
+    @objc private func forgetApp(_ sender: ClaudeProjectButton) {
+        ComputerUseService.shared.forgetApproval(for: sender.projectName)
+        rebuildComputerUse()
+    }
+
+    private func rebuildComputerUse() {
+        accessibilityRow.update(granted: AXIsProcessTrusted())
+        screenRow.update(granted: CGPreflightScreenCaptureAccess())
+        appRows.forEach { $0.removeFromSuperview() }
+        let allowed = ComputerUseService.shared.alwaysAllowedApps
+        if allowed.isEmpty {
+            let empty = ClaudeSettingsEmptyRow(text: "Apps you always allow show up here.")
+            computerCard.addSubview(empty)
+            appRows = [empty]
+        } else {
+            appRows = allowed.map { bundleID in
+                let row = ComputerUseAppRow(bundleID: bundleID)
+                row.forgetButton.target = self
+                row.forgetButton.action = #selector(forgetApp(_:))
+                computerCard.addSubview(row)
+                return row
+            }
+        }
+        needsLayout = true
     }
 
     // MARK: Projects
@@ -347,6 +419,90 @@ private final class ClaudeSettingsEmptyRow: NSView {
 
 final class ClaudeProjectButton: StickmanIconButton {
     var projectName = ""
+}
+
+private final class ComputerUsePermissionRow: NSView {
+    let button = NSButton(title: "Turn On…", target: nil, action: nil)
+    private let icon = NSImageView()
+    private let titleLabel: NSTextField
+    private let detailLabel: NSTextField
+    private let statusLabel = NSTextField(labelWithString: "On")
+
+    init(symbol: String, title: String, detail: String) {
+        titleLabel = NSTextField(labelWithString: title)
+        detailLabel = NSTextField(labelWithString: detail)
+        super.init(frame: .zero)
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        icon.contentTintColor = StickmanStyle.secondaryText
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.textColor = StickmanStyle.primaryText
+        detailLabel.font = .systemFont(ofSize: 11.5)
+        detailLabel.textColor = StickmanStyle.secondaryText
+        detailLabel.lineBreakMode = .byTruncatingTail
+        statusLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        statusLabel.textColor = .systemGreen
+        statusLabel.alignment = .right
+        StickmanStyle.configurePrimaryButton(button)
+        [icon, titleLabel, detailLabel, statusLabel, button].forEach(addSubview)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+
+    func update(granted: Bool) {
+        statusLabel.stringValue = granted ? "On" : ""
+        statusLabel.isHidden = !granted
+        button.isHidden = granted
+    }
+
+    override func layout() {
+        super.layout()
+        icon.frame = NSRect(x: 14, y: 16, width: 20, height: 20)
+        titleLabel.frame = NSRect(x: 44, y: 8, width: bounds.width - 170, height: 18)
+        detailLabel.frame = NSRect(x: 44, y: 27, width: bounds.width - 170, height: 16)
+        button.frame = NSRect(x: bounds.width - 14 - 96, y: 12, width: 96, height: 28)
+        statusLabel.frame = NSRect(x: bounds.width - 14 - 96, y: 17, width: 96, height: 18)
+    }
+}
+
+private final class ComputerUseAppRow: NSView {
+    let forgetButton = ClaudeProjectButton(symbol: "minus.circle", label: "Stop always allowing", pointSize: 13, weight: .regular)
+    private let icon = NSImageView()
+    private let nameLabel: NSTextField
+
+    init(bundleID: String) {
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+        let name = url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleID
+        nameLabel = NSTextField(labelWithString: name)
+        super.init(frame: .zero)
+        icon.image = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
+            ?? NSImage(systemSymbolName: "app", accessibilityDescription: nil)
+        nameLabel.font = .systemFont(ofSize: 13)
+        nameLabel.textColor = StickmanStyle.primaryText
+        nameLabel.toolTip = bundleID
+        forgetButton.projectName = bundleID
+        [icon, nameLabel, forgetButton].forEach(addSubview)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override var isFlipped: Bool { true }
+
+    override func layout() {
+        super.layout()
+        icon.frame = NSRect(x: 14, y: 9, width: 22, height: 22)
+        nameLabel.frame = NSRect(x: 44, y: 11, width: bounds.width - 100, height: 18)
+        forgetButton.frame = NSRect(x: bounds.width - 38, y: 7, width: 26, height: 26)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        StickmanStyle.hairline.setFill()
+        NSRect(x: 14, y: 0, width: bounds.width - 14, height: 1).fill()
+    }
 }
 
 private final class ClaudeProjectRow: NSView {

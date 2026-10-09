@@ -12,6 +12,7 @@ let package = Package(
         .executable(name: "StickmanBlockerDaemon", targets: ["StickmanBlockerDaemon"]),
         .executable(name: "StickmanBlockerInstaller", targets: ["StickmanBlockerInstaller"]),
         .executable(name: "stickman-blocker-recover", targets: ["StickmanBlockerRecover"]),
+        .executable(name: "stickman-computer-use", targets: ["StickmanComputerUseMCP"]),
     ],
     targets: [
         // Shared policy, file formats, and paths for Stickman Blocker.
@@ -35,6 +36,10 @@ let package = Package(
             name: "StickmanBlockerRecover",
             dependencies: ["NightLockCore"],
             path: "Blocker/Sources/StickmanBlockerRecover"),
+        // MCP server Claude Code launches; forwards computer-use tool calls to the running app.
+        .executableTarget(
+            name: "StickmanComputerUseMCP",
+            path: "ComputerUse/Sources/StickmanComputerUseMCP"),
         .testTarget(
             name: "StickmanTests",
             dependencies: ["Stickman"],

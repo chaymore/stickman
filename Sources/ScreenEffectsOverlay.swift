@@ -30,6 +30,12 @@ final class ScreenEffectsOverlayController {
         )
     }
 
+    /// Dust rolling out from where Stickman lands. Strength 1 is a solid drop; above 1 adds a ground shockwave.
+    func showLandingDust(at screenPoint: CGPoint, strength: CGFloat) {
+        guard let panel = panel(containing: screenPoint) else { return }
+        panel.effectView.addLandingDust(at: localPoint(screenPoint, in: panel), strength: strength)
+    }
+
     func showSlash(from start: CGPoint, to end: CGPoint) {
         guard let panel = panel(containing: end) ?? panel(containing: start) else { return }
         panel.effectView.addSlash(
@@ -45,6 +51,12 @@ final class ScreenEffectsOverlayController {
             to: CGPoint(x: end.x - panel.frame.minX, y: end.y - panel.frame.minY),
             duration: duration
         )
+    }
+
+    /// Marks where Claude clicked during computer use.
+    func showClickRipple(at screenPoint: CGPoint) {
+        guard let panel = panel(containing: screenPoint) else { return }
+        panel.effectView.addClickRipple(at: localPoint(screenPoint, in: panel))
     }
 
     func showModeTransition(at screenPoint: CGPoint, enteringCombat: Bool) {
@@ -108,18 +120,6 @@ private final class ScreenEffectsPanel: NSPanel {
 }
 
 private final class ScreenEffectsView: NSView {
-    private struct Impact {
-        let point: CGPoint
-        let bornAt: TimeInterval
-        let strength: CGFloat
-    }
-
-    private struct Slash {
-        let start: CGPoint
-        let end: CGPoint
-        let bornAt: TimeInterval
-    }
-
     private struct Tether {
         let start: CGPoint
         let end: CGPoint
@@ -127,17 +127,8 @@ private final class ScreenEffectsView: NSView {
         let duration: TimeInterval
     }
 
-    private struct Transition {
-        let point: CGPoint
-        let bornAt: TimeInterval
-        let enteringCombat: Bool
-    }
-
     private var timer: Timer?
-    private var impacts: [Impact] = []
-    private var slashes: [Slash] = []
     private var tether: Tether?
-    private var transition: Transition?
     private var guidance: [ScreenGuidanceMarker] = []
     private var guidanceBornAt: TimeInterval = 0
 
@@ -159,13 +150,18 @@ private final class ScreenEffectsView: NSView {
     deinit { timer?.invalidate() }
 
     func addImpact(at point: CGPoint, strength: CGFloat) {
-        impacts.append(Impact(point: point, bornAt: now, strength: max(0.4, min(2, strength))))
-        needsDisplay = true
+        guard let layer else { return }
+        StickmanParticles.impact(in: layer, at: point, strength: strength)
+    }
+
+    func addLandingDust(at point: CGPoint, strength: CGFloat) {
+        guard let layer else { return }
+        StickmanParticles.landingDust(in: layer, at: point, strength: strength)
     }
 
     func addSlash(from start: CGPoint, to end: CGPoint) {
-        slashes.append(Slash(start: start, end: end, bornAt: now))
-        needsDisplay = true
+        guard let layer else { return }
+        StickmanParticles.slash(in: layer, from: start, to: end)
     }
 
     func setTether(from start: CGPoint, to end: CGPoint, duration: TimeInterval) {
@@ -173,9 +169,39 @@ private final class ScreenEffectsView: NSView {
         needsDisplay = true
     }
 
+    func addClickRipple(at point: CGPoint) {
+        guard let layer else { return }
+        for (offset, delay) in [(0, 0.0), (1, 0.12)] {
+            let ring = CAShapeLayer()
+            ring.path = CGPath(ellipseIn: CGRect(x: -14, y: -14, width: 28, height: 28), transform: nil)
+            ring.position = point
+            ring.fillColor = offset == 0 ? NSColor.systemOrange.withAlphaComponent(0.18).cgColor : NSColor.clear.cgColor
+            ring.strokeColor = NSColor.systemOrange.withAlphaComponent(0.9).cgColor
+            ring.lineWidth = offset == 0 ? 2.5 : 1.5
+            ring.opacity = 0
+            layer.addSublayer(ring)
+
+            let scale = CABasicAnimation(keyPath: "transform.scale")
+            scale.fromValue = 0.35
+            scale.toValue = offset == 0 ? 1.25 : 1.9
+            let fade = CAKeyframeAnimation(keyPath: "opacity")
+            fade.values = [0, 1, 0]
+            fade.keyTimes = [0, 0.18, 1]
+            let group = CAAnimationGroup()
+            group.animations = [scale, fade]
+            group.duration = 0.55
+            group.beginTime = CACurrentMediaTime() + delay
+            group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            group.fillMode = .both
+            group.isRemovedOnCompletion = false
+            ring.add(group, forKey: "ripple")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8 + delay) { ring.removeFromSuperlayer() }
+        }
+    }
+
     func addModeTransition(at point: CGPoint, enteringCombat: Bool) {
-        transition = Transition(point: point, bornAt: now, enteringCombat: enteringCombat)
-        needsDisplay = true
+        guard let layer else { return }
+        StickmanParticles.modeShift(in: layer, at: point, enteringCombat: enteringCombat)
     }
 
     func setGuidance(_ markers: [ScreenGuidanceMarker]) {
@@ -190,10 +216,7 @@ private final class ScreenEffectsView: NSView {
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
 
-        drawImpacts(context)
-        drawSlashes(context)
         drawTether(context)
-        drawTransition(context)
         drawGuidance(context)
     }
 
@@ -201,111 +224,45 @@ private final class ScreenEffectsView: NSView {
 
     private func tick() {
         let timestamp = now
-        impacts.removeAll { timestamp - $0.bornAt > 0.72 }
-        slashes.removeAll { timestamp - $0.bornAt > 0.32 }
         if let tether, timestamp - tether.bornAt > tether.duration { self.tether = nil }
-        if let transition, timestamp - transition.bornAt > 0.9 { self.transition = nil }
-        if !impacts.isEmpty || !slashes.isEmpty || tether != nil || transition != nil || !guidance.isEmpty {
+        if tether != nil || !guidance.isEmpty {
             needsDisplay = true
         }
     }
 
-    private func drawImpacts(_ context: CGContext) {
-        for impact in impacts {
-            let progress = CGFloat((now - impact.bornAt) / 0.72)
-            let alpha = max(0, 1 - progress)
-            let radius = (14 + progress * 92) * impact.strength
-
-            context.saveGState()
-            context.setStrokeColor(NSColor.black.withAlphaComponent(alpha * 0.72).cgColor)
-            context.setLineWidth(max(1.2, 5 * (1 - progress)))
-            context.strokeEllipse(in: CGRect(
-                x: impact.point.x - radius,
-                y: impact.point.y - radius,
-                width: radius * 2,
-                height: radius * 2
-            ))
-
-            for index in 0 ..< 18 {
-                let angle = CGFloat(index) / 18 * .pi * 2 + impact.point.x.truncatingRemainder(dividingBy: 1.7)
-                let inner = radius * 0.25
-                let outer = radius * (0.6 + CGFloat((index * 37) % 31) / 60)
-                context.move(to: CGPoint(
-                    x: impact.point.x + cos(angle) * inner,
-                    y: impact.point.y + sin(angle) * inner
-                ))
-                context.addLine(to: CGPoint(
-                    x: impact.point.x + cos(angle) * outer,
-                    y: impact.point.y + sin(angle) * outer
-                ))
-            }
-            context.setLineWidth(2.4 * impact.strength)
-            context.strokePath()
-            context.restoreGState()
-        }
-    }
-
-    private func drawSlashes(_ context: CGContext) {
-        for slash in slashes {
-            let progress = CGFloat((now - slash.bornAt) / 0.32)
-            let alpha = max(0, 1 - progress)
-            let vector = CGVector(dx: slash.end.x - slash.start.x, dy: slash.end.y - slash.start.y)
-            let length = max(1, hypot(vector.dx, vector.dy))
-            let normal = CGVector(dx: -vector.dy / length, dy: vector.dx / length)
-
-            context.saveGState()
-            context.setLineCap(.round)
-            for offset in [-5.0, 0.0, 5.0] {
-                context.move(to: CGPoint(x: slash.start.x + normal.dx * offset, y: slash.start.y + normal.dy * offset))
-                context.addLine(to: CGPoint(x: slash.end.x + normal.dx * offset, y: slash.end.y + normal.dy * offset))
-                context.setStrokeColor(NSColor.black.withAlphaComponent(alpha * (offset == 0 ? 0.86 : 0.28)).cgColor)
-                context.setLineWidth(offset == 0 ? 5 : 1.5)
-                context.strokePath()
-            }
-            context.restoreGState()
-        }
-    }
-
+    /// The lasso rope: sags a little, ripples while it pulls, and has a light highlight
+    /// so it reads on dark backgrounds.
     private func drawTether(_ context: CGContext) {
         guard let tether else { return }
         let progress = CGFloat((now - tether.bornAt) / tether.duration)
         let alpha = max(0, min(1, 1 - progress))
         let distance = hypot(tether.end.x - tether.start.x, tether.end.y - tether.start.y)
-        let segments = max(5, Int(distance / 18))
+        let segments = max(12, Int(distance / 8))
+        let sag = min(40, distance * 0.12) * (1 - progress)
 
-        context.saveGState()
-        context.setStrokeColor(NSColor.black.withAlphaComponent(alpha * 0.72).cgColor)
-        context.setLineWidth(3)
-        context.setLineCap(.round)
-        context.move(to: tether.start)
+        let rope = CGMutablePath()
+        rope.move(to: tether.start)
         for index in 1 ... segments {
             let t = CGFloat(index) / CGFloat(segments)
-            let wave = sin(t * .pi * 8 + CGFloat(now * 22)) * 5 * (1 - abs(t - 0.5))
+            let envelope = sin(t * .pi)
+            let ripple = sin(t * .pi * 5 - CGFloat(now * 26)) * 3 * envelope
             let x = tether.start.x + (tether.end.x - tether.start.x) * t
-            let y = tether.start.y + (tether.end.y - tether.start.y) * t + wave
-            context.addLine(to: CGPoint(x: x, y: y))
+            let y = tether.start.y + (tether.end.y - tether.start.y) * t - sag * envelope + ripple
+            rope.addLine(to: CGPoint(x: x, y: y))
         }
-        context.strokePath()
-        context.restoreGState()
-    }
-
-    private func drawTransition(_ context: CGContext) {
-        guard let transition else { return }
-        let progress = CGFloat((now - transition.bornAt) / 0.9)
-        let alpha = max(0, 1 - progress)
-        let radius = 30 + progress * 180
 
         context.saveGState()
-        context.setStrokeColor(NSColor.black.withAlphaComponent(alpha * 0.45).cgColor)
-        context.setLineWidth(transition.enteringCombat ? 6 : 2)
-        let dash: [CGFloat] = transition.enteringCombat ? [14, 9] : [3, 12]
-        context.setLineDash(phase: progress * 40, lengths: dash)
-        context.strokeEllipse(in: CGRect(
-            x: transition.point.x - radius,
-            y: transition.point.y - radius,
-            width: radius * 2,
-            height: radius * 2
-        ))
+        context.setLineCap(.round)
+        context.setLineJoin(.round)
+        context.addPath(rope)
+        context.setStrokeColor(NSColor(calibratedWhite: 0.08, alpha: alpha * 0.85).cgColor)
+        context.setLineWidth(4.5)
+        context.strokePath()
+        context.translateBy(x: -0.8, y: 0.8)
+        context.addPath(rope)
+        context.setStrokeColor(NSColor.white.withAlphaComponent(alpha * 0.45).cgColor)
+        context.setLineWidth(1.4)
+        context.strokePath()
         context.restoreGState()
     }
 

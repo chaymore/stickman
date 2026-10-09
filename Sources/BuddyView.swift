@@ -8,6 +8,8 @@ enum StickmanMotion: Equatable {
     case crouching(progress: CGFloat)
     case airborne(velocity: CGVector, planned: Bool)
     case held(velocity: CGVector)
+    /// Hanging from a ledge by both hands, like the bottom edge of the notch.
+    case hanging
 }
 
 enum StickmanFidget: CaseIterable {
@@ -52,6 +54,7 @@ final class StickmanView: NSView {
         case falling
         case landing
         case held
+        case hanging
         case listening
         case thinking
         case happy
@@ -114,6 +117,7 @@ final class StickmanView: NSView {
         case airborne
         case landing
         case held
+        case hanging
         case fidget(StickmanFidget)
     }
 
@@ -158,6 +162,15 @@ final class StickmanView: NSView {
         func offsetBy(dx: CGFloat, dy: CGFloat) -> StickPose {
             var copy = self
             for keyPath in StickPose.points { copy[keyPath: keyPath].x += dx; copy[keyPath: keyPath].y += dy }
+            return copy
+        }
+
+        /// Swings the body around a pivot, leaving the hands where they grip.
+        func swung(around pivot: CGPoint, by angle: CGFloat) -> StickPose {
+            var copy = self
+            for keyPath in StickPose.points where keyPath != \StickPose.leftHand && keyPath != \StickPose.rightHand {
+                copy[keyPath: keyPath] = StickmanView.rotate(self[keyPath: keyPath], around: pivot, by: angle)
+            }
             return copy
         }
 
@@ -218,6 +231,8 @@ final class StickmanView: NSView {
     private var combatMoveEndsAt: TimeInterval = 0
     private var combatSerial = 0
     private var previewState: PreviewState?
+    /// Recent solved frames, drawn as fading afterimages during fast strikes.
+    private var trail: [Skeleton] = []
 
     private var displayedState: StickmanState = .idle
     private var transitionFrom: StickPose?
@@ -271,14 +286,13 @@ final class StickmanView: NSView {
         context.scaleBy(x: renderScale, y: renderScale)
 
         drawShadow(context: context)
-        drawLandingDust(context: context)
 
         context.saveGState()
         let flip = facingScale >= 0 ? max(0.08, facingScale) : min(-0.08, facingScale)
         context.translateBy(x: 80, y: 0)
         context.scaleBy(x: flip, y: 1)
         context.translateBy(x: -80, y: 0)
-        drawMotionAccents(context: context)
+        drawAfterimages(context: context)
         drawStickFigure(context: context)
         drawTaskEffects(context: context)
         context.restoreGState()
@@ -342,46 +356,24 @@ final class StickmanView: NSView {
         context.fillEllipse(in: CGRect(x: centerX - width / 2, y: 148 + lift, width: width, height: 7))
     }
 
-    private func drawLandingDust(context: CGContext) {
-        let elapsed = time - landingStartedAt
-        guard landingImpact > 520, elapsed < 0.42 else { return }
-        let progress = CGFloat(elapsed / 0.42)
-        let strength = min(1, (landingImpact - 520) / 1200)
-        context.saveGState()
-        context.setLineCap(.round)
-        context.setStrokeColor(NSColor.black.withAlphaComponent(0.5 * (1 - progress) * (0.4 + strength * 0.6)).cgColor)
-        context.setLineWidth(2.2)
-        for side in [-1.0, 1.0] as [CGFloat] {
-            for index in 0 ..< 3 {
-                let spread = 18 + progress * (26 + strength * 18) + CGFloat(index) * 6
-                let x = 80 + side * spread
-                let y = 146 - CGFloat(index) * 4 - progress * 6
-                context.move(to: CGPoint(x: x - side * 5, y: y + 2))
-                context.addLine(to: CGPoint(x: x, y: y))
-            }
-        }
-        context.strokePath()
-        context.restoreGState()
-    }
-
-    private func drawMotionAccents(context: CGContext) {
-        guard mode == .sparring else { return }
+    /// Fading copies of the last few frames trail behind a punch, kick, or dodge.
+    private func drawAfterimages(context: CGContext) {
+        guard mode == .sparring, trail.count >= 7 else { return }
         let elapsed = time - combatMoveStartedAt
-        guard elapsed < 0.48 else { return }
+        guard elapsed < 0.34 else { return }
         switch combatMove {
-        case .jab, .kick, .dodge, .hit:
-            context.saveGState()
-            context.setStrokeColor(NSColor.black.withAlphaComponent(max(0, 0.35 - CGFloat(elapsed) * 0.6)).cgColor)
-            context.setLineWidth(2)
-            for index in 0 ..< 3 {
-                let y = 54 + CGFloat(index * 12)
-                context.move(to: CGPoint(x: 18, y: y))
-                context.addLine(to: CGPoint(x: 45 + CGFloat(index * 4), y: y - 3))
-            }
-            context.strokePath()
-            context.restoreGState()
-        default:
-            break
+        case .jab, .kick, .dodge, .hit, .lasso, .groundSlam: break
+        case .guardStance, .victory: return
+        }
+        let fade = CGFloat(1 - elapsed / 0.34)
+        for (offset, alpha) in [(3, 0.24), (5, 0.14), (7, 0.07)] as [(Int, CGFloat)] {
+            let ghost = trail[trail.count - offset]
+            let color = NSColor.black.withAlphaComponent(alpha * fade)
+            strokeSkeleton(ghost, context: context, color: color, width: 6)
+            let r = Bone.headRadius
+            context.setStrokeColor(color.cgColor)
+            context.setLineWidth(6)
+            context.strokeEllipse(in: CGRect(x: ghost.head.x - r, y: ghost.head.y - r, width: r * 2, height: r * 2))
         }
     }
 
@@ -544,6 +536,8 @@ final class StickmanView: NSView {
             blendedPose = target
         }
         skeleton = Self.solve(blendedPose)
+        trail.append(skeleton)
+        if trail.count > 8 { trail.removeFirst(trail.count - 8) }
         needsDisplay = true
     }
 
@@ -689,6 +683,9 @@ final class StickmanView: NSView {
             landingImpact = 1100
             landingDuration = 0.18 + min(0.3, Double(landingImpact) / 3800)
             landingStartedAt = floor(time / 0.6) * 0.6
+        case .hanging:
+            motion = .hanging
+            heightAboveGround = 400
         case .held:
             motion = .held(velocity: CGVector(dx: CGFloat(sin(time * 3)) * 600, dy: 0))
             swingAngle = CGFloat(sin(time * 3 - 0.8)) * -0.35
@@ -772,6 +769,7 @@ final class StickmanView: NSView {
     private func currentState() -> StickmanState {
         switch motion {
         case .held: return .held
+        case .hanging: return .hanging
         case .airborne: return .airborne
         case .crouching: return .crouching
         case .grounded: break
@@ -803,7 +801,7 @@ final class StickmanView: NSView {
         switch (from, to) {
         case (_, .landing), (.crouching, .airborne): return 0.05
         case (.combat, .combat): return 0.07
-        case (_, .held), (_, .crouching): return 0.12
+        case (_, .held), (_, .crouching), (_, .hanging): return 0.12
         case (.airborne, _), (.held, _): return 0.1
         case (_, .sleeping), (.sleeping, _): return 0.8
         case (_, .sitting), (.sitting, _): return 0.45
@@ -914,6 +912,7 @@ final class StickmanView: NSView {
         case .airborne: return airbornePose()
         case .landing: return landingPose()
         case .held: return heldPose()
+        case .hanging: return hangingPose()
         case .fidget(let fidget): return fidgetPose(fidget)
         }
     }
@@ -1108,6 +1107,22 @@ final class StickmanView: NSView {
             rightKnee: CGPoint(x: 92, y: 114), rightFoot: CGPoint(x: 88 - kick * 3, y: 140 - max(0, -kick) * 6),
             hangSwing: swingAngle
         )
+    }
+
+    /// Hanging from a ledge, seen from the side: both hands overhead in front of his face,
+    /// head tipped back, body under the grip, legs dangling and swinging a little.
+    private func hangingPose() -> StickPose {
+        let sway = CGFloat(sin(time * 3.1)) * 0.08
+        let kick = CGFloat(sin(time * 7.5))
+        let grip = CGPoint(x: 98, y: 6)
+        let hanging = StickPose(
+            head: CGPoint(x: 66, y: 38), neck: CGPoint(x: 84, y: 52), hip: CGPoint(x: 89, y: 97),
+            leftElbow: CGPoint(x: 96, y: 30), leftHand: CGPoint(x: 96, y: 6),
+            rightElbow: CGPoint(x: 100, y: 30), rightHand: CGPoint(x: 100, y: 7),
+            leftKnee: CGPoint(x: 99, y: 124), leftFoot: CGPoint(x: 86 + kick * 4, y: 151 - max(0, kick) * 5),
+            rightKnee: CGPoint(x: 101, y: 123), rightFoot: CGPoint(x: 93 - kick * 4, y: 150 - max(0, -kick) * 5)
+        )
+        return hanging.swung(around: grip, by: sway)
     }
 
     private func sittingPose() -> StickPose {

@@ -52,8 +52,8 @@ enum StickmanPermissionKind: String, CaseIterable, Identifiable {
         case .reminders: return "Create the reminders you explicitly ask Stickman to add."
         case .notifications: return "Show timely class and meeting nudges."
         case .microphone: return "Hear you only while voice mode is active."
-        case .screenRecording: return "Capture a screenshot only when you ask for screen help."
-        case .accessibility: return "Move the current window when you request it."
+        case .screenRecording: return "Capture a screenshot when you ask for screen help, or of the app Claude is working in."
+        case .accessibility: return "Move windows when you ask, and let Claude operate apps you approve."
         case .chromeAutomation: return "Open, list, and switch tabs only on explicit requests."
         }
     }

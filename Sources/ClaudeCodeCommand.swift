@@ -10,6 +10,8 @@ struct ClaudeCodeRequest: Equatable {
     var trailingProject: String?
     var taskWithoutTrailingProject: String?
     var runsInCloud: Bool
+    /// Runs on Opus with Stickman's computer-use tools, which only work on this Mac.
+    var usesComputer: Bool = false
 }
 
 enum ClaudeCodeCommandParser {
@@ -17,9 +19,14 @@ enum ClaudeCodeCommandParser {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var body = commandBody(in: text) else { return nil }
 
-        var runsInCloud = body.cloud
+        var usesComputer = body.computer
+        if !usesComputer, let range = body.task.range(of: #"(?i)^(?:by\s+)?(?:use|using)\s+(?:my|the)\s+(?:computer|mac|screen)\s*,?\s*(?:to\s+)?"#, options: .regularExpression) {
+            usesComputer = true
+            body.task.removeSubrange(range)
+        }
+        var runsInCloud = usesComputer ? false : body.cloud
         for phrase in [#"(?i)\s*\b(?:in|on)\s+the\s+cloud\b"#, #"(?i)\s*\bin\s+a\s+cloud\s+session\b"#] {
-            if let range = body.task.range(of: phrase, options: .regularExpression) {
+            if !usesComputer, let range = body.task.range(of: phrase, options: .regularExpression) {
                 runsInCloud = true
                 body.task.removeSubrange(range)
             }
@@ -52,7 +59,8 @@ enum ClaudeCodeCommandParser {
             explicitProject: explicitProject,
             trailingProject: trailingProject,
             taskWithoutTrailingProject: withoutTrailing,
-            runsInCloud: runsInCloud
+            runsInCloud: runsInCloud,
+            usesComputer: usesComputer
         )
     }
 
@@ -64,19 +72,22 @@ enum ClaudeCodeCommandParser {
         return name.count > 60 ? String(name.prefix(57)) + "…" : name
     }
 
-    private static func commandBody(in text: String) -> (task: String, cloud: Bool)? {
-        let patterns: [(String, Bool)] = [
-            (#"(?is)^/claude\s+(.+)$"#, false),
-            (#"(?is)^/cloud\s+(.+)$"#, true),
-            (#"(?is)^(?:hey\s+)?(?:have|ask|get|tell)\s+claude(?:\s+code)?\s+(?:to\s+)?(.+)$"#, false),
-            (#"(?is)^claude(?:\s+code)?\s*[:,]\s*(.+)$"#, false)
+    private static func commandBody(in text: String) -> (task: String, cloud: Bool, computer: Bool)? {
+        let patterns: [(String, Bool, Bool)] = [
+            (#"(?is)^/claude\s+(.+)$"#, false, false),
+            (#"(?is)^/cloud\s+(.+)$"#, true, false),
+            (#"(?is)^/computer\s+(.+)$"#, false, true),
+            (#"(?is)^(?:hey\s+)?(?:please\s+)?use\s+my\s+(?:computer|mac)\s+(?:to\s+)?(.+)$"#, false, true),
+            (#"(?is)^computer\s+use\s*[:,]\s*(.+)$"#, false, true),
+            (#"(?is)^(?:hey\s+)?(?:have|ask|get|tell)\s+claude(?:\s+code)?\s+(?:to\s+)?(.+)$"#, false, false),
+            (#"(?is)^claude(?:\s+code)?\s*[:,]\s*(.+)$"#, false, false)
         ]
-        for (pattern, cloud) in patterns {
+        for (pattern, cloud, computer) in patterns {
             guard let regex = try? NSRegularExpression(pattern: pattern),
                   let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                   let range = Range(match.range(at: 1), in: text)
             else { continue }
-            return (String(text[range]), cloud)
+            return (String(text[range]), cloud, computer)
         }
         return nil
     }

@@ -16,9 +16,9 @@ BUILD_NUMBER="${STICKMAN_BUILD_NUMBER:-7}"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$ROOT_DIR/.local-build"
 
-# Stickman.app carries Stickman Blocker's root daemon, installer, and recovery tool
-# alongside the app itself. SwiftPM builds all four, once per architecture.
-PRODUCTS=(Stickman StickmanBlockerDaemon StickmanBlockerInstaller stickman-blocker-recover)
+# Stickman.app carries Stickman Blocker's root daemon, installer, and recovery tool, plus
+# the computer-use MCP relay, alongside the app itself. SwiftPM builds them once per architecture.
+PRODUCTS=(Stickman StickmanBlockerDaemon StickmanBlockerInstaller stickman-blocker-recover stickman-computer-use)
 SCRATCH_ROOT="${STICKMAN_BUILD_PATH:-${TMPDIR:-/tmp}/stickman-build}"
 BIN_DIRS=()
 for ARCH in ${(z)ARCH_LIST}; do
@@ -28,8 +28,9 @@ for ARCH in ${(z)ARCH_LIST}; do
 done
 
 for PRODUCT in "${PRODUCTS[@]}"; do
+  # The app binary is the bundle's executable itself, so macOS privacy grants made for
+  # Stickman.app apply to the running process. LaunchEnvironment.swift loads its API keys.
   DESTINATION="$MACOS_DIR/$PRODUCT"
-  [[ "$PRODUCT" == "Stickman" ]] && DESTINATION="$MACOS_DIR/StickmanBinary"
   INPUTS=()
   for BIN_DIR in "${BIN_DIRS[@]}"; do INPUTS+=("$BIN_DIR/$PRODUCT"); done
   if (( ${#INPUTS[@]} == 1 )); then
@@ -45,47 +46,6 @@ if [[ -d "$ROOT_DIR/Resources" ]]; then
   ditto "$ROOT_DIR/Resources" "$RESOURCES_DIR"
 fi
 
-cat > "$MACOS_DIR/Stickman" <<'SCRIPT'
-#!/bin/zsh
-
-set -euo pipefail
-
-KEYCHAIN_SERVICE="Stickman OpenAI API Key"
-OPENROUTER_KEYCHAIN_SERVICE="Stickman OpenRouter API Key"
-APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-
-read_keychain_value() {
-  local primary_service="$1"
-  local legacy_service="$2"
-  local value
-  value="$(security find-generic-password -a "$USER" -s "$primary_service" -w 2>/dev/null || true)"
-  if [[ -z "$value" ]]; then
-    value="$(security find-generic-password -a "$USER" -s "$legacy_service" -w 2>/dev/null || true)"
-  fi
-  print -r -- "$value"
-}
-
-if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-  key="$(read_keychain_value "$KEYCHAIN_SERVICE" "Milo OpenAI API Key")"
-  if [[ -n "$key" ]]; then
-    export OPENAI_API_KEY="$key"
-  fi
-fi
-
-if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
-  openrouter_key="$(read_keychain_value "$OPENROUTER_KEYCHAIN_SERVICE" "Milo OpenRouter API Key")"
-  if [[ -n "$openrouter_key" ]]; then
-    export OPENROUTER_API_KEY="$openrouter_key"
-  fi
-fi
-
-export STICKMAN_PROJECT_DIR="$APP_ROOT/Resources"
-export STICKMAN_SYSTEM_PROMPT_PATH="$APP_ROOT/Resources/STICKMAN_SYSTEM_PROMPT.md"
-
-exec "$APP_ROOT/MacOS/StickmanBinary"
-SCRIPT
-
-chmod +x "$MACOS_DIR/Stickman" "$MACOS_DIR/StickmanBinary"
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -133,9 +93,19 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 PLIST
 
 if command -v codesign >/dev/null 2>&1; then
-  SIGN_IDENTITY="${STICKMAN_SIGN_IDENTITY:--}"
+  # A local self-signed "Stickman Local Signing" identity, when present, gives every build
+  # the same code identity, so macOS keeps Accessibility and Screen Recording grants across
+  # reinstalls. Without it the build is ad-hoc signed and the grants reset each time.
+  LOCAL_IDENTITY="Stickman Local Signing"
+  if [[ -z "${STICKMAN_SIGN_IDENTITY:-}" ]] && security find-identity -p codesigning 2>/dev/null | grep -q "\"$LOCAL_IDENTITY\""; then
+    SIGN_IDENTITY="$LOCAL_IDENTITY"
+  else
+    SIGN_IDENTITY="${STICKMAN_SIGN_IDENTITY:--}"
+  fi
   if [[ "$SIGN_IDENTITY" == "-" ]]; then
     codesign --force --deep --sign - "$APP_DIR" >/dev/null
+  elif [[ "$SIGN_IDENTITY" == "$LOCAL_IDENTITY" ]]; then
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR" >/dev/null
   else
     codesign --force --deep --options runtime \
       --entitlements "$ROOT_DIR/Resources/Stickman.entitlements" \

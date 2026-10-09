@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         showStickman()
         configureStatusItem()
         StickmanBlocker.shared.start()
+        ComputerUseService.shared.start()
 
         let hotKeyManager = HotKeyManager(
             onToggle: { [weak self] in DispatchQueue.main.async { self?.toggleStickman() } },

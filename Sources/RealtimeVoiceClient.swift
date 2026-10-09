@@ -106,7 +106,7 @@ final class RealtimeVoiceClient {
         \(WebsiteBlockerService.shared.statusSummary)
 
         You are in live voice mode. Keep replies conversational, warm, and brief unless the user asks for detail.
-        Use spawn_background_agent when the user asks you to delegate work or run a sub-agent. Use start_claude_code when the user asks Claude or Claude Code to do coding work in one of their projects; pass the project name they said, or an empty string if they named none. Use list_claude_code_sessions when they ask how Claude's work is going. Use the Chrome tools for explicit browser requests. Tell the user what you started or changed after the tool returns.
+        Use spawn_background_agent when the user asks you to delegate work or run a sub-agent. Use start_claude_code when the user asks Claude or Claude Code to do coding work in one of their projects; pass the project name they said, or an empty string if they named none. Also use start_claude_code with computer_use true when the user asks you to do something on their computer that needs an app's interface. Use list_claude_code_sessions when they ask how Claude's work is going. Use the Chrome tools for explicit browser requests. Tell the user what you started or changed after the tool returns.
         """
 
         sendJSON([
@@ -299,15 +299,16 @@ final class RealtimeVoiceClient {
         [
             "type": "function",
             "name": "start_claude_code",
-            "description": "Start a Claude Code session on the user's personal account to do coding work in one of their projects. Runs in the background on this Mac, or in the cloud when the user asks for that.",
+            "description": "Start a Claude Code session on the user's personal account to do coding work in one of their projects, or to operate apps on this Mac with computer use. Runs in the background on this Mac, or in the cloud when the user asks for that.",
             "parameters": [
                 "type": "object",
                 "properties": [
                     "task": ["type": "string", "description": "The complete coding task, in the user's words plus any needed detail."],
                     "project": ["type": "string", "description": "The project name the user said, or an empty string to use the project in the focused window or the default."],
-                    "cloud": ["type": "boolean", "description": "True only when the user asks to run it in the cloud."]
+                    "cloud": ["type": "boolean", "description": "True only when the user asks to run it in the cloud."],
+                    "computer_use": ["type": "boolean", "description": "True when the task means operating apps on this Mac, like clicking through a website, filling in a form, or working in an app with no API. Runs on Opus with Stickman's computer-use tools."]
                 ],
-                "required": ["task", "project", "cloud"],
+                "required": ["task", "project", "cloud", "computer_use"],
                 "additionalProperties": false
             ]
         ],

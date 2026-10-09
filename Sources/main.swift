@@ -1,5 +1,7 @@
 import AppKit
 
+LaunchEnvironment.prepare()
+
 if let previewFlagIndex = CommandLine.arguments.firstIndex(of: "--render-avatar-preview") {
     let pathIndex = previewFlagIndex + 1
     let outputPath = CommandLine.arguments.indices.contains(pathIndex)
@@ -95,6 +97,10 @@ if let flagIndex = CommandLine.arguments.firstIndex(of: "--render-block-page") {
         fputs("Failed to render block page: \(error)\n", stderr)
         exit(1)
     }
+}
+
+if CommandLine.arguments.contains("--effects-demo") {
+    MainActor.assumeIsolated { StickmanEffectsDemo.run(seconds: 8) }
 }
 
 let app = NSApplication.shared
