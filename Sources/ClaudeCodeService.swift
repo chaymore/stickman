@@ -497,6 +497,9 @@ final class ClaudeCodeService {
 
     /// Environment for every Claude Code process: the user's shell PATH, the personal
     /// profile folder, and no inherited API keys that would override the subscription login.
+    /// Auto-update stays off here: Stickman runs `claude` every few seconds while sessions
+    /// work, and two updates starting together can delete a global npm install. The user's
+    /// own terminal sessions still update Claude Code.
     private func environment() async -> [String: String] {
         var environment = ProcessInfo.processInfo.environment
         for key in ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"] {
@@ -504,6 +507,7 @@ final class ClaudeCodeService {
         }
         environment["PATH"] = await shellPath()
         environment["CLAUDE_CONFIG_DIR"] = expandedConfigDirectory
+        environment["DISABLE_AUTOUPDATER"] = "1"
         return environment
     }
 
