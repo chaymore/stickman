@@ -361,6 +361,22 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
         }
     }
 
+    /// Goals, next steps, and coach settings. Check-ins can take a few seconds.
+    private func runCoachCommand(_ command: CoachCommand) {
+        messages.append(ChatMessage(role: .assistant, content: ""))
+        let index = messages.count - 1
+        isThinking = true
+        setStatus("Thinking about your goals…", tone: .busy)
+        renderMessages()
+        Task { @MainActor in
+            let reply = await CoachService.shared.handle(command)
+            if self.messages.indices.contains(index) { self.messages[index].content = reply }
+            self.isThinking = false
+            self.setStatus("Ready", tone: .ready)
+            self.renderMessages()
+        }
+    }
+
     private func presentClaudeUpdate(_ session: ClaudeCodeSession, needsAttention: Bool) {
         let text: String
         if needsAttention {
@@ -494,6 +510,11 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
         hideClaudeSessions()
         renderMessages()
 
+        if let coachCommand = CoachCommandParser.parse(text) {
+            runCoachCommand(coachCommand)
+            return
+        }
+
         if let claudeRequest = ClaudeCodeCommandParser.parse(text) {
             startClaudeCode(claudeRequest)
             return
@@ -614,7 +635,19 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
             guard let session = notification.userInfo?["session"] as? ClaudeCodeSession else { return }
             self?.presentClaudeUpdate(session, needsAttention: notification.userInfo?["needsAttention"] as? Bool ?? false)
         }
-        agentObservers = [changeObserver, completionObserver, claudeChange, claudeFinish]
+        let coachSpoke = NotificationCenter.default.addObserver(
+            forName: .stickmanCoachDidSpeak,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            // Replies to chat commands are already shown by runCoachCommand.
+            guard let self, notification.userInfo?["proactive"] as? Bool == true,
+                  let text = notification.userInfo?["text"] as? String
+            else { return }
+            self.messages.append(ChatMessage(role: .assistant, content: text))
+            self.renderMessages()
+        }
+        agentObservers = [changeObserver, completionObserver, claudeChange, claudeFinish, coachSpoke]
     }
 
     private func refreshAgentButton() {

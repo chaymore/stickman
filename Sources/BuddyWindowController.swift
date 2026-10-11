@@ -126,6 +126,10 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             guard let self, let session = notification.userInfo?["session"] as? ClaudeCodeSession else { return }
             self.reactToClaudeUpdate(session, needsAttention: notification.userInfo?["needsAttention"] as? Bool ?? false)
         })
+        observers.append(center.addObserver(forName: .stickmanCoachDidSpeak, object: nil, queue: .main) { [weak self] notification in
+            guard notification.userInfo?["proactive"] as? Bool == true else { return }
+            self?.reactToCoachNudge()
+        })
         observers.append(center.addObserver(forName: .stickmanComputerUseDidChange, object: nil, queue: .main) { [weak self] notification in
             guard let self else { return }
             self.reactToComputerUse(
@@ -291,6 +295,17 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             stickmanView.showSuccessMoment()
             locomotion.hop(height: 26, now: CACurrentMediaTime())
         }
+    }
+
+    /// The coach has something to say: Stickman turns to the cursor and waves.
+    /// The text waits in chat and in a notification, so the panel never steals focus.
+    private func reactToCoachNudge() {
+        guard isShown, !isHiddenForScreenShare, !isTuckedInNotch, notchMove == nil,
+              StickmanModeController.shared.mode == .peaceful
+        else { return }
+        markInteraction()
+        stickmanView.setFacing(NSEvent.mouseLocation.x - locomotion.position.x)
+        stickmanView.playFidget(.wave)
     }
 
     /// Stickman looks busy while Claude drives the computer, and startled when the user stops it.

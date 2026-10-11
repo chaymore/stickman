@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         BackgroundAgentCoordinator.shared.start()
         CalendarNudgeService.shared.start()
         ProactiveStudyService.shared.start()
+        CoachService.shared.start()
 
         StickmanBlockPage.prepare()
         showStickman()
@@ -70,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         BackgroundAgentCoordinator.shared.stop()
         CalendarNudgeService.shared.stop()
         ProactiveStudyService.shared.stop()
+        CoachService.shared.stop()
         if let statusItem { NSStatusBar.system.removeStatusItem(statusItem) }
     }
 

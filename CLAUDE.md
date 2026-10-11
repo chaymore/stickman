@@ -19,9 +19,14 @@ Smoke test through the real path: `scripts/computer-use-call.py list_apps`, then
 
 Stickman runs Claude Code under the personal profile (`CLAUDE_CONFIG_DIR=~/.claude-personal`). `/claude`, `/cloud`, and `/computer` in chat map to `ClaudeCodeService`; computer-use sessions add `--model opus --mcp-config <support>/computer-use-mcp.json --allowedTools mcp__stickman`.
 
+## Coach
+
+`CoachService.swift` runs proactive check-ins: it snapshots goals, guidelines, memory, the front app, calendar, and Claude sessions, asks `claude -p` (no tools, `--json-schema`) for a decision, and runs only what `CoachPolicy` in `CoachBrain.swift` approves. Files live in `~/Library/Application Support/Stickman/coach`. Chat: `/goals`, `/done`, `/next`, `/coach`. See `docs/COACH.md`.
+
 ## Rules
 
 - Commit or push only when the user asks.
 - Keep Stickman Blocker's protections intact: no bypasses, and the recovery key flow stays as is.
+- The coach may only add focus blocks or lengthen focus; it never ends focus, snoozes, or touches the protected Blocker schedule.
 - Computer use stays approval-gated per app, with terminals, password managers, and System Settings off-limits and password fields never typed into.
 - User-facing text: plain and direct, no em dashes.

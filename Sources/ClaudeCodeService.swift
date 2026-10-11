@@ -388,6 +388,20 @@ final class ClaudeCodeService {
         return URL(string: String(output[range]))
     }
 
+    /// One headless turn with no tools and no MCP servers that must answer in `schema`.
+    /// Returns the raw `--output-format json` envelope. Used by the coach's check-ins.
+    func runStructured(prompt: String, schema: String, model: String, workingDirectory: String, timeout: TimeInterval = 120) async throws -> String {
+        try await requireSignedIn()
+        let arguments = [
+            "-p", "--output-format", "json", "--model", model,
+            "--tools", "", "--strict-mcp-config", "--no-session-persistence",
+            "--json-schema", schema, "--", prompt
+        ]
+        let result = try await run(arguments, workingDirectory: workingDirectory, timeout: timeout)
+        guard result.status == 0 else { throw failure(result) }
+        return result.stdout
+    }
+
     func refreshSessions() async {
         guard let result = try? await run(["agents", "--json", "--all"], timeout: 15), result.status == 0,
               let array = (try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8))) as? [[String: Any]]

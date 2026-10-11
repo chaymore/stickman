@@ -12,6 +12,8 @@ struct WebsiteBlockerSettings: Codable {
     var snoozeUntil: Date?
     var focusSessionUntil: Date?
     var focusBlockedDomains: [String]?
+    /// Extra sites for the current focus session only, such as ones the coach picked.
+    var focusSessionExtraDomains: [String]?
 
     static let defaults = WebsiteBlockerSettings(
         enabled: true,
@@ -22,7 +24,8 @@ struct WebsiteBlockerSettings: Codable {
         blockedDomains: ["youtube.com", "x.com", "reddit.com", "facebook.com"],
         snoozeUntil: nil,
         focusSessionUntil: nil,
-        focusBlockedDomains: ["youtube.com", "x.com", "reddit.com", "facebook.com", "instagram.com", "netflix.com"]
+        focusBlockedDomains: ["youtube.com", "x.com", "reddit.com", "facebook.com", "instagram.com", "netflix.com"],
+        focusSessionExtraDomains: nil
     )
 }
 
@@ -206,8 +209,24 @@ final class WebsiteBlockerService {
         return "Focus guard is on for \(safeMinutes) minutes. I will keep the scroll traps closed while you work."
     }
 
+    /// Starts or extends a focus session with extra sites blocked until it ends.
+    /// Never shortens a session that is already running.
+    func startFocusSession(minutes: Int, extraDomains: [String]) -> String {
+        let safeMinutes = max(5, min(240, minutes))
+        let requestedEnd = Date().addingTimeInterval(TimeInterval(safeMinutes * 60))
+        let currentEnd = settings.focusSessionUntil.flatMap { $0 > Date() ? $0 : nil }
+        if currentEnd == nil { settings.focusSessionExtraDomains = nil }
+        settings.focusSessionUntil = max(currentEnd ?? requestedEnd, requestedEnd)
+        let added = extraDomains.map(WebsiteBlockerDomainMatcher.normalizedDomain).filter { !$0.isEmpty }
+        settings.focusSessionExtraDomains = Array(Set((settings.focusSessionExtraDomains ?? []) + added)).sorted()
+        saveSettings()
+        checkNow()
+        return "Focus guard is on for \(safeMinutes) minutes."
+    }
+
     func endFocusSession() -> String {
         settings.focusSessionUntil = nil
+        settings.focusSessionExtraDomains = nil
         saveSettings()
         return "Focus session ended. Nice work."
     }
@@ -327,7 +346,7 @@ final class WebsiteBlockerService {
 
     private func inspect(_ adapter: BrowserAdapter, focusActive: Bool) {
         let domains = focusActive
-            ? Array(Set(settings.blockedDomains + (settings.focusBlockedDomains ?? []))).sorted()
+            ? Array(Set(settings.blockedDomains + (settings.focusBlockedDomains ?? []) + (settings.focusSessionExtraDomains ?? []))).sorted()
             : settings.blockedDomains
         do {
             guard let currentURL = try adapter.activeTabURL(),
@@ -387,6 +406,7 @@ final class WebsiteBlockerService {
     private func pruneExpiredFocusIfNeeded() {
         if let end = settings.focusSessionUntil, end <= Date() {
             settings.focusSessionUntil = nil
+            settings.focusSessionExtraDomains = nil
             saveSettings()
         }
     }
