@@ -54,7 +54,7 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
     private var voiceTask: Task<Void, Never>?
     private var responseTimeoutTimer: Timer?
     private var isThinking = false
-    private var isVoiceModeActive = false
+    private(set) var isVoiceModeActive = false
     private var voiceAssistantMessageIndex: Int?
     private var pendingScreenshot: ScreenshotAttachment? { didSet { attachmentChip.isHidden = pendingScreenshot == nil; needsLayout = true } }
     private var agentObservers: [NSObjectProtocol] = []
@@ -279,15 +279,6 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
         composerText.setSelectedRange(NSRange(location: (composerText.string as NSString).length, length: 0))
     }
 
-    func prepareScreenContext() {
-        do {
-            pendingScreenshot = try captureScreenWithoutStickman()
-            setStatus("I can see your screen for the next question", tone: .ready)
-        } catch {
-            setStatus("Screen context needs permission", tone: .problem)
-        }
-    }
-
     func showAgentStatus() {
         messages.append(ChatMessage(role: .assistant, content: BackgroundAgentCoordinator.shared.compactSummary))
         renderMessages()
@@ -340,13 +331,13 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
                     reply = "Started a cloud session for **\(name)** in `\(project.name)`."
                     reply += url.map { " [Open it on claude.ai](\($0.absoluteString))" } ?? " You'll find it at claude.ai/code."
                 } else {
-                    _ = try await service.startBackground(task: task, in: project, usesComputer: request.usesComputer)
+                    let sessionKey = try await service.startBackground(task: task, in: project, usesComputer: request.usesComputer)
+                    StickmanCloneRequest.post(sessionKey: sessionKey, name: name)
                     if request.usesComputer {
                         reply = "Started **\(name)** on Opus with computer use. I'll ask before Claude touches a new app, and you can press esc anytime to stop it."
                     } else {
-                        reply = "Started **\(name)** in `\(project.name)`. I'll tell you when it's done."
+                        reply = "Started **\(name)** in `\(project.name)`. My clone is on it up in the corner. I'll tell you when it's done."
                     }
-                    StickmanTaskAnimationController.play(.spawnAgent)
                 }
             } catch {
                 reply = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -499,6 +490,20 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
             return
         }
 
+        // Sub-agents and background work run as Claude Code sessions.
+        if let prompt = StickmanAgentCommandParser.taskPrompt(from: text),
+           let claudeRequest = ClaudeCodeCommandParser.parse("/claude " + prompt) {
+            startClaudeCode(claudeRequest)
+            return
+        }
+
+        if StickmanDanceCommand.matches(text) {
+            messages.append(ChatMessage(role: .assistant, content: StickmanDanceCommand.reply()))
+            renderMessages()
+            StickmanTaskAnimationController.play(.dance)
+            return
+        }
+
         if let actionResult = ActionRunner.shared.handleIfAction(text) {
             messages.append(ChatMessage(role: .assistant, content: ""))
             onActivityChanged?(.working)
@@ -548,7 +553,7 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
         }
     }
 
-    private func stopVoiceMode() {
+    func stopVoiceMode() {
         isVoiceModeActive = false
         voiceAssistantMessageIndex = nil
         voiceTask?.cancel()
@@ -845,14 +850,9 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
     @MainActor
     func realtimeVoiceClient(_ client: RealtimeVoiceClient, executeFunction name: String, arguments: [String: Any]) -> String {
         switch name {
-        case "spawn_background_agent":
-            guard let prompt = arguments["task"] as? String, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return #"{"error":"A task is required."}"#
-            }
-            let opensLinks = arguments["open_browser_links"] as? Bool ?? false
-            let task = BackgroundAgentCoordinator.shared.spawn(prompt: prompt, opensBrowserLinks: opensLinks)
-            StickmanTaskAnimationController.play(.spawnAgent)
-            return #"{"status":"started","agent_id":"\#(task.id)","message":"The background agent is working."}"#
+        case "dance":
+            StickmanTaskAnimationController.play(.dance)
+            return #"{"status":"dancing"}"#
 
         case "open_chrome_tab":
             guard let destination = arguments["destination"] as? String else {
