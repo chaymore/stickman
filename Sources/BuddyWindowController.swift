@@ -242,13 +242,6 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         isVisible ? presentPanel(.chat) : closePanel()
     }
 
-    func quickAssist() {
-        StickmanModeController.shared.setMode(.peaceful, reason: "quick assist")
-        presentPanel(.chat)
-        panel.chatView.prepareScreenContext()
-        panel.chatView.focusInput()
-    }
-
     func openMenu() {
         StickmanModeController.shared.setMode(.peaceful, reason: "menu shortcut")
         presentPanel(.chat)
@@ -354,10 +347,6 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         settingsReturnsToChat = false
         presentPanel(.settings)
         panel.settingsView.showConnections()
-    }
-
-    func toggleCombatMode() {
-        StickmanModeController.shared.toggle(reason: "Option-F")
     }
 
     private func presentPanel(_ content: StickmanCompanionPanelController.Content) {

@@ -279,15 +279,6 @@ final class StickmanChatPanelView: NSView, RealtimeVoiceClientDelegate {
         composerText.setSelectedRange(NSRange(location: (composerText.string as NSString).length, length: 0))
     }
 
-    func prepareScreenContext() {
-        do {
-            pendingScreenshot = try captureScreenWithoutStickman()
-            setStatus("I can see your screen for the next question", tone: .ready)
-        } catch {
-            setStatus("Screen context needs permission", tone: .problem)
-        }
-    }
-
     func showAgentStatus() {
         messages.append(ChatMessage(role: .assistant, content: BackgroundAgentCoordinator.shared.compactSummary))
         renderMessages()

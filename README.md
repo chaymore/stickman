@@ -63,8 +63,7 @@ export STICKMAN_OPENROUTER_MODEL=google/gemini-2.5-flash
 | Send him somewhere | `Option`+click a window to climb onto it, or empty space to walk there |
 | Close the panel | `Esc` |
 | Hide in the notch, or bring him back out | `Option+B`. From the top half of the screen he leaps straight up and grabs it; from the bottom half he wall-jumps off the nearer side of the screen |
-| Quick screen-aware assist | `Option+Space` |
-| End sparring | `Option+F`, **Stop Fighting** in the menu bar, or circle Stickman with the cursor |
+| End sparring | **Stop Fighting** in the menu bar, or circle Stickman with the cursor |
 | Open chat menu | `Control+-` |
 | Start or stop voice mode | Tap `Control+Option` together and let go |
 | Dance | Ask him to dance in chat or voice |

@@ -36,8 +36,6 @@ Sparring never synthesizes clicks, edits documents, closes apps, or changes anot
 ## Interaction map
 
 - `Option+B`: Stickman leaps into the notch and hides; press again and he drops back out. From the bottom half of the screen he sprints to the nearer side, wall-jumps, and catches the notch at the top of the arc.
-- `Option+Space`: peaceful quick assist with fresh screen context.
-- `Option+F`: call a truce while sparring.
 - `Control+-`: open Stickman's chat menu.
 - `Control+Option` (tap and release, no other key): start or stop voice mode.
 - Menu bar stickman: open chat or settings, start voice, inspect background agents, hide/show Stickman, or quit.

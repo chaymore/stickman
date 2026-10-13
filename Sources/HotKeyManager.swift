@@ -4,8 +4,6 @@ import AppKit
 final class HotKeyManager {
     private enum HotKey: UInt32 {
         case toggleVisibility = 1
-        case quickAssist = 2
-        case toggleCombat = 3
         case openMenu = 4
     }
 
@@ -15,21 +13,15 @@ final class HotKeyManager {
     private var voiceChord = VoiceChordTracker()
     private let signature = OSType(0x4D494C4F)
     private let onToggle: () -> Void
-    private let onQuickAssist: () -> Void
-    private let onToggleCombat: () -> Void
     private let onOpenMenu: () -> Void
     private let onToggleVoice: () -> Void
 
     init(
         onToggle: @escaping () -> Void,
-        onQuickAssist: @escaping () -> Void,
-        onToggleCombat: @escaping () -> Void,
         onOpenMenu: @escaping () -> Void,
         onToggleVoice: @escaping () -> Void
     ) {
         self.onToggle = onToggle
-        self.onQuickAssist = onQuickAssist
-        self.onToggleCombat = onToggleCombat
         self.onOpenMenu = onOpenMenu
         self.onToggleVoice = onToggleVoice
     }
@@ -63,8 +55,6 @@ final class HotKeyManager {
         guard status == noErr else { return }
 
         register(keyCode: UInt32(kVK_ANSI_B), modifiers: UInt32(optionKey), id: .toggleVisibility)
-        register(keyCode: UInt32(kVK_Space), modifiers: UInt32(optionKey), id: .quickAssist)
-        register(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(optionKey), id: .toggleCombat)
         register(keyCode: UInt32(kVK_ANSI_Minus), modifiers: UInt32(controlKey), id: .openMenu)
         installVoiceChordMonitors()
     }
@@ -81,8 +71,6 @@ final class HotKeyManager {
     private func handle(id: UInt32) {
         switch HotKey(rawValue: id) {
         case .toggleVisibility: onToggle()
-        case .quickAssist: onQuickAssist()
-        case .toggleCombat: onToggleCombat()
         case .openMenu: onOpenMenu()
         case nil: break
         }

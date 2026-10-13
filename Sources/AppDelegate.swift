@@ -43,8 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let hotKeyManager = HotKeyManager(
             onToggle: { [weak self] in DispatchQueue.main.async { self?.toggleStickman() } },
-            onQuickAssist: { [weak self] in DispatchQueue.main.async { self?.quickAssist() } },
-            onToggleCombat: { [weak self] in DispatchQueue.main.async { self?.toggleCombat() } },
             onOpenMenu: { [weak self] in DispatchQueue.main.async { self?.openMenu() } },
             onToggleVoice: { [weak self] in DispatchQueue.main.async { self?.toggleVoiceMode() } }
         )
@@ -162,11 +160,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func quickAssist() {
-        summonIfNeeded()
-        stickmanWindowController?.quickAssist()
-    }
-
     private func openMenu() {
         summonIfNeeded()
         stickmanWindowController?.openMenu()
@@ -184,11 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             startVoiceMode()
         }
-    }
-
-    private func toggleCombat() {
-        summonIfNeeded()
-        stickmanWindowController?.toggleCombatMode()
     }
 
     private func configureStatusItem() {
