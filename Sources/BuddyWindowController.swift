@@ -10,6 +10,8 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
     private let panel = StickmanCompanionPanelController()
     private let locomotion: StickmanLocomotion
     private lazy var combatDirector = CombatDirector(delegate: self)
+    private let cloneDirector = StickmanCloneDirector()
+    private var sleepCorner: SleepCorner?
 
     private var tickTimer: Timer?
     private var lastTickAt: TimeInterval = 0
@@ -28,7 +30,6 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
 
     private var stillSince: TimeInterval = 0
     private var nextIdleBehaviorAt: TimeInterval = 0
-    private var nextGlanceAt: TimeInterval = 0
 
     private var observers: [NSObjectProtocol] = []
     private var windowAffinityTimer: Timer?
@@ -116,6 +117,10 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             guard let raw = notification.userInfo?["animation"] as? String,
                   let animation = StickmanTaskAnimation(rawValue: raw)
             else { return }
+            if animation == .dance {
+                self?.locomotion.stop()
+                self?.clearPerch()
+            }
             self?.stickmanView.performTaskAnimation(animation)
             self?.markInteraction()
         })
@@ -125,6 +130,10 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         observers.append(center.addObserver(forName: .stickmanClaudeSessionDidFinish, object: nil, queue: .main) { [weak self] notification in
             guard let self, let session = notification.userInfo?["session"] as? ClaudeCodeSession else { return }
             self.reactToClaudeUpdate(session, needsAttention: notification.userInfo?["needsAttention"] as? Bool ?? false)
+        })
+        observers.append(center.addObserver(forName: .stickmanClaudeCloneRequested, object: nil, queue: .main) { [weak self] notification in
+            guard let self, let key = notification.userInfo?["key"] as? String else { return }
+            self.splitOffClone(sessionKey: key, name: notification.userInfo?["name"] as? String ?? key)
         })
         observers.append(center.addObserver(forName: .stickmanComputerUseDidChange, object: nil, queue: .main) { [weak self] notification in
             guard let self else { return }
@@ -185,6 +194,7 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
     func setHiddenForScreenShare(_ hidden: Bool) {
         guard hidden != isHiddenForScreenShare else { return }
         isHiddenForScreenShare = hidden
+        cloneDirector.setHidden(hidden)
         guard isShown, let window else { return }
 
         if hidden {
@@ -250,6 +260,12 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         panel.chatView.startVoiceMode()
     }
 
+    var isVoiceModeActive: Bool { panel.chatView.isVoiceModeActive }
+
+    func stopVoiceMode() {
+        panel.chatView.stopVoiceMode()
+    }
+
     func showAgentStatus() {
         StickmanModeController.shared.setMode(.peaceful, reason: "agent status")
         presentPanel(.chat)
@@ -283,7 +299,6 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         else { return }
         markInteraction()
         if needsAttention {
-            stickmanView.setFacing(NSEvent.mouseLocation.x - locomotion.position.x)
             stickmanView.playFidget(.wave)
         } else if session.state == "failed" {
             stickmanView.showErrorMoment()
@@ -303,6 +318,28 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             stickmanView.showErrorMoment()
         }
         markInteraction()
+    }
+
+    /// Stickman buzzes, then a colored copy of him splits off to go work on the session.
+    /// When he's out of sight, the clone just appears at its spot.
+    private func splitOffClone(sessionKey: String, name: String) {
+        guard isShown, !isHiddenForScreenShare, !isTuckedInNotch, notchMove == nil,
+              StickmanModeController.shared.mode == .peaceful
+        else {
+            cloneDirector.spawn(sessionKey: sessionKey, name: name, from: nil)
+            return
+        }
+        locomotion.stop()
+        clearPerch()
+        stickmanView.setRest(.awake)
+        stickmanView.vibrate(for: 0.6)
+        markInteraction()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) { [weak self] in
+            guard let self else { return }
+            self.stickmanView.showBurst()
+            let origin = self.isShown && !self.isHiddenForScreenShare && !self.isTuckedInNotch ? self.locomotion.position : nil
+            self.cloneDirector.spawn(sessionKey: sessionKey, name: name, from: origin)
+        }
     }
 
     func openPermissions() {
@@ -434,6 +471,7 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
             stillSince = now
             nextIdleBehaviorAt = max(nextIdleBehaviorAt, now + Double.random(in: 6 ... 14))
             completePerchIfNeeded()
+            completeSleepCornerIfNeeded()
         case .launched, .startedFalling:
             break
         }
@@ -475,8 +513,6 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
                 stickmanView.setFacing(locomotion.velocity.dx)
             } else if panel.isVisible {
                 stickmanView.setFacing(panel.isOnRight ? 1 : -1)
-            } else {
-                glanceAtCursorIfNear(now: now)
             }
         case .crouching(_, let launch, _, _, _):
             if abs(launch.dx) > 20 { stickmanView.setFacing(launch.dx) }
@@ -487,28 +523,13 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         }
     }
 
-    private func glanceAtCursorIfNear(now: TimeInterval) {
-        guard now >= nextGlanceAt,
-              stickmanView.currentRest == .awake,
-              stickmanView.isAvailableForIdleBehavior,
-              StickmanModeController.shared.mode == .peaceful
-        else { return }
-        let cursor = NSEvent.mouseLocation
-        let center = CGPoint(x: locomotion.position.x, y: locomotion.position.y + 50)
-        let dx = cursor.x - center.x
-        guard abs(dx) > 40, hypot(dx, cursor.y - center.y) < 360 else { return }
-        if (dx > 0 ? 1 : -1) != stickmanView.facingDirection {
-            stickmanView.setFacing(dx)
-            nextGlanceAt = now + Double.random(in: 2.5 ... 5)
-        }
-    }
-
     // MARK: Idle life
 
     private func markInteraction() {
         let now = CACurrentMediaTime()
         stillSince = now
         nextIdleBehaviorAt = now + Double.random(in: 14 ... 30)
+        sleepCorner = nil
         if stickmanView.currentRest != .awake, seatedWindowIdentity == nil {
             stickmanView.setRest(.awake)
         }
@@ -529,7 +550,8 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         let stillFor = now - stillSince
         let rest = stickmanView.currentRest
         if stillFor > 420, rest != .sleeping {
-            stickmanView.setRest(.sleeping)
+            if !headToSleepingCorner() { stickmanView.setRest(.sleeping) }
+            return
         } else if stillFor > 150, rest == .awake {
             stickmanView.setRest(.sitting)
         }
@@ -546,6 +568,36 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         if wanders, roll < 42, strollAlongLedge() { return }
         if wanders, roll < 58, hopToNearbyLedge() { return }
         if roll < 92 { playFidget() }
+    }
+
+    /// Walks to the nearer bottom corner of his screen to sleep against the wall there.
+    private func headToSleepingCorner() -> Bool {
+        let here = locomotion.position
+        let screens = NSScreen.screens.map(\.visibleFrame)
+        guard let index = screens.firstIndex(where: { $0.minX <= here.x && here.x < $0.maxX })
+                ?? screens.indices.min(by: { abs(screens[$0].midX - here.x) < abs(screens[$1].midX - here.x) }),
+              let floor = locomotion.surfaces.first(where: { $0.kind == .floor(screen: index) })
+        else { return false }
+        clearPerch()
+        let wallOnRight = here.x > (floor.minX + floor.maxX) / 2
+        sleepCorner = SleepCorner(kind: floor.kind, wallOnRight: wallOnRight)
+        let x = wallOnRight ? floor.maxX : floor.minX
+        let parkedX = floor.clampedX(x, inset: locomotion.tuning.edgeInset)
+        if locomotion.groundedKind == floor.kind, abs(here.x - parkedX) < 3 {
+            completeSleepCornerIfNeeded()
+        } else {
+            locomotion.go(to: .init(kind: floor.kind, x: x))
+        }
+        return true
+    }
+
+    private func completeSleepCornerIfNeeded() {
+        guard let corner = sleepCorner else { return }
+        sleepCorner = nil
+        guard locomotion.groundedKind == corner.kind, StickmanModeController.shared.mode == .peaceful, !panel.isVisible else { return }
+        // His back goes to the wall, so he faces into the screen.
+        stickmanView.setFacing(corner.wallOnRight ? -1 : 1)
+        stickmanView.setRest(.sleeping, againstWall: true)
     }
 
     @discardableResult
@@ -586,7 +638,6 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         var options: [StickmanFidget] = [.lookAround, .stretch, .tapFoot]
         if cursorNearby { options.append(.wave) }
         let fidget = options.randomElement() ?? .stretch
-        if fidget == .wave { stickmanView.setFacing(cursor.x - locomotion.position.x) }
         stickmanView.playFidget(fidget)
     }
 
@@ -617,12 +668,11 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         let wasResting = stickmanView.currentRest != .awake
         clearPerch()
         stickmanView.setRest(.awake)
-        stickmanView.setFacing(NSEvent.mouseLocation.x - locomotion.position.x)
         locomotion.hop(height: wasResting ? 34 : 22, now: CACurrentMediaTime())
         markInteraction()
     }
 
-    /// Right-click destination. Stickman walks there, leaping onto or off windows as needed.
+    /// Option+click destination. Stickman walks there, leaping onto or off windows as needed.
     func walkStickman(to screenPoint: NSPoint) {
         guard StickmanModeController.shared.mode == .peaceful, !panel.isVisible, !isTuckedInNotch, notchMove == nil else { return }
         if case .held = locomotion.state { return }
@@ -645,7 +695,9 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         }
     }
 
-    /// Crouch, leap up under the notch, and get pulled up into it.
+    /// From the top half of the screen: crouch, leap straight up under the notch, grab it,
+    /// and pull up into it. From the bottom half: sprint to the nearer side of the screen,
+    /// leap onto the wall, kick off it, and catch the notch at the top of the arc.
     private func tuckIntoNotch() {
         guard isShown, !isHiddenForScreenShare, notchMove == nil, !isTuckedInNotch else { return }
         if case .held = locomotion.state { return }
@@ -660,11 +712,46 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         let start = locomotion.position
         stickmanView.setFacing(entry.x - start.x)
         let now = CACurrentMediaTime()
+        if let wallJump = planWallJump(from: start, entry: entry, notch: notch, now: now) {
+            notchMove = wallJump
+            stickmanView.setFacing(wallJump.wallOnRight ? 1 : -1)
+            return
+        }
         if entry.y - start.y > 24 {
             notchMove = NotchMove(phase: .crouch, startedAt: now, duration: 0.16, from: start, to: entry, aboveScreen: notch.screenTop + 24)
         } else {
             notchMove = NotchMove(phase: .climb, startedAt: now, duration: 0.42, from: start, to: CGPoint(x: entry.x, y: notch.screenTop + 24), aboveScreen: notch.screenTop + 24)
         }
+    }
+
+    /// Plans the wall-jump route when he starts in the bottom half of the notch's screen.
+    private func planWallJump(from start: CGPoint, entry: CGPoint, notch: (rect: NSRect, screenTop: CGFloat), now: TimeInterval) -> NotchMove? {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.maxY == notch.screenTop && $0.frame.minX <= start.x && start.x < $0.frame.maxX }),
+              start.y < screen.frame.midY,
+              entry.y - start.y > 200
+        else { return nil }
+        let frame = screen.frame
+        let wallOnRight = start.x > frame.midX
+        let wallX = wallOnRight ? frame.maxX : frame.minX
+        let away: CGFloat = wallOnRight ? -1 : 1
+        // Feet sit about 27 points in front of his center in the cling pose.
+        let clingX = wallX + away * 27
+        let rise = min(360, max(120, (entry.y - start.y) * 0.4))
+        let cling = CGPoint(x: clingX, y: min(start.y + rise, entry.y - 120))
+
+        // Sprint along his ledge toward the wall, stopping short enough to leave a real leap.
+        var runEnd = start
+        if let kind = locomotion.groundedKind,
+           let ledge = locomotion.surfaces.first(where: { $0.kind == kind && $0.contains(x: start.x, margin: 4) }) {
+            let target = wallX + away * 150
+            let edge = ledge.clampedX(target, inset: locomotion.tuning.edgeInset)
+            if (edge - start.x) * -away > 0 { runEnd.x = edge }
+        }
+        var move = NotchMove(phase: .run, startedAt: now, duration: max(0.05, Double(abs(runEnd.x - start.x) / 520)), from: start, to: runEnd, aboveScreen: notch.screenTop + 24)
+        move.entry = entry
+        move.cling = cling
+        move.wallOnRight = wallOnRight
+        return move
     }
 
     /// Slide out of the notch, dangle for a moment, then drop to the ledge below.
@@ -706,9 +793,14 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         let motion: StickmanMotion
 
         switch move.phase {
+        case .run:
+            position = SMath.mix(move.from, move.to, progress)
+            motion = .grounded(velocityX: move.to.x >= move.from.x ? 520 : -520)
         case .crouch:
             motion = .crouching(progress: progress)
-        case .leap:
+        case .cling:
+            motion = .wallCling
+        case .leap, .wallLeap:
             let t = CGFloat(min(elapsed, move.duration))
             position = CGPoint(x: move.from.x + move.launch.dx * t, y: move.from.y + move.launch.dy * t - 0.5 * gravity * t * t)
             motion = .airborne(velocity: CGVector(dx: move.launch.dx, dy: move.launch.dy - gravity * t), planned: true)
@@ -726,10 +818,50 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
 
         scriptedPosition = position
         place(window: window, at: position)
-        stickmanView.updateMotion(motion, heightAboveGround: 400)
+        if case .grounded = motion {
+            stickmanView.updateMotion(motion, heightAboveGround: 0)
+        } else {
+            stickmanView.updateMotion(motion, heightAboveGround: 400)
+        }
         guard progress >= 1 else { return true }
 
         switch move.phase {
+        case .run:
+            move.phase = .crouch
+            move.startedAt = now
+            move.duration = 0.12
+            move.from = position
+            notchMove = move
+        case .crouch where move.cling != nil:
+            // Leap onto the wall.
+            let jump = StickmanJump.solve(from: position, to: move.cling ?? position, gravity: gravity)
+            move.phase = .wallLeap
+            move.startedAt = now
+            move.duration = jump.duration
+            move.from = position
+            move.launch = jump.velocity
+            notchMove = move
+        case .wallLeap:
+            move.phase = .cling
+            move.startedAt = now
+            move.duration = 0.16
+            move.from = position
+            notchMove = move
+        case .cling:
+            // Kick off the wall so the top of the arc lands his hands on the notch.
+            let entry = move.entry ?? position
+            let rise = max(1, entry.y - position.y)
+            let launchSpeed = (2 * gravity * rise).squareRoot()
+            let duration = Double(launchSpeed / gravity)
+            stickmanView.setFacing(entry.x - position.x)
+            move.phase = .leap
+            move.startedAt = now
+            move.duration = duration
+            move.from = position
+            move.to = entry
+            move.launch = CGVector(dx: (entry.x - position.x) / CGFloat(duration), dy: launchSpeed)
+            move.cling = nil
+            notchMove = move
         case .crouch:
             let rise = max(1, move.to.y - move.from.y)
             let launchSpeed = (2 * gravity * rise).squareRoot()
@@ -906,6 +1038,8 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
         }
 
         guard !panel.isVisible,
+              stickmanView.currentRest != .sleeping,
+              sleepCorner == nil,
               seatedWindowIdentity == nil,
               pendingPerch == nil,
               !locomotion.isBusy,
@@ -1010,7 +1144,10 @@ final class StickmanWindowController: NSWindowController, CombatDirectorDelegate
 
 private struct NotchMove {
     enum Phase {
+        case run
         case crouch
+        case wallLeap
+        case cling
         case leap
         case grab
         case climb
@@ -1026,8 +1163,17 @@ private struct NotchMove {
     /// Feet height that puts him fully above the screen's top edge.
     var aboveScreen: CGFloat
     var launch = CGVector.zero
+    /// Wall-jump route only: the notch grip point, the wall contact point, and which wall.
+    var entry: CGPoint?
+    var cling: CGPoint?
+    var wallOnRight = false
 
-    var isHiding: Bool { [.crouch, .leap, .grab, .climb].contains(phase) }
+    var isHiding: Bool { [.run, .crouch, .wallLeap, .cling, .leap, .grab, .climb].contains(phase) }
+}
+
+private struct SleepCorner {
+    let kind: StickmanSurface.Kind
+    let wallOnRight: Bool
 }
 
 private struct PerchTarget {

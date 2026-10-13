@@ -10,6 +10,10 @@ enum StickmanMotion: Equatable {
     case held(velocity: CGVector)
     /// Hanging from a ledge by both hands, like the bottom edge of the notch.
     case hanging
+    /// Crouched sideways against a wall mid wall-jump, facing the wall.
+    case wallCling
+    /// Floating cross-legged in the air, like a Claude Code clone while it works.
+    case levitating
 }
 
 enum StickmanFidget: CaseIterable {
@@ -55,6 +59,8 @@ final class StickmanView: NSView {
         case landing
         case held
         case hanging
+        case wallCling
+        case levitating
         case listening
         case thinking
         case happy
@@ -69,6 +75,8 @@ final class StickmanView: NSView {
         case error
         case perched
         case sleeping
+        case slumped
+        case dancing
         case sparring
         case punch
         case kick
@@ -118,6 +126,11 @@ final class StickmanView: NSView {
         case landing
         case held
         case hanging
+        case wallCling
+        case levitating
+        case dancing
+        /// Asleep, slouched against the side of the screen.
+        case slumped
         case fidget(StickmanFidget)
     }
 
@@ -201,6 +214,11 @@ final class StickmanView: NSView {
     private var activity: Activity = .quiet
     private var mode: StickmanMode = .peaceful
     private var rest: StickmanRest = .awake
+    private var sleepsAgainstWall = false
+    /// Stroke color. Clones are tinted so they read as separate workers.
+    var tint: NSColor = .black { didSet { needsDisplay = true } }
+    private var vibrateUntil: TimeInterval = -10
+    private var burstStartedAt: TimeInterval = -10
     private var isChatVisible = false
     private var motion: StickmanMotion = .grounded(velocityX: 0)
     private var heightAboveGround: CGFloat = 0
@@ -288,6 +306,10 @@ final class StickmanView: NSView {
         drawShadow(context: context)
 
         context.saveGState()
+        if time < vibrateUntil {
+            context.translateBy(x: CGFloat(sin(time * 97)) * 2.2, y: CGFloat(cos(time * 131)) * 1.1)
+        }
+        drawLevitationGlow(context: context)
         let flip = facingScale >= 0 ? max(0.08, facingScale) : min(-0.08, facingScale)
         context.translateBy(x: 80, y: 0)
         context.scaleBy(x: flip, y: 1)
@@ -298,6 +320,7 @@ final class StickmanView: NSView {
         context.restoreGState()
 
         drawSleepMarks(context: context, flip: flip)
+        drawBurst(context: context)
         context.restoreGState()
 
         drawChatHint()
@@ -307,14 +330,14 @@ final class StickmanView: NSView {
         let halo = NSColor.white.withAlphaComponent(0.72)
         let width: CGFloat = mode == .sparring ? 7.5 : 7
         strokeSkeleton(skeleton, context: context, color: halo, width: width + 5)
-        strokeSkeleton(skeleton, context: context, color: .black, width: width)
+        strokeSkeleton(skeleton, context: context, color: tint, width: width)
 
         let r = Bone.headRadius
         let headRect = CGRect(x: skeleton.head.x - r, y: skeleton.head.y - r, width: r * 2, height: r * 2)
         context.setStrokeColor(halo.cgColor)
         context.setLineWidth(width + 5)
         context.strokeEllipse(in: headRect)
-        context.setStrokeColor(NSColor.black.cgColor)
+        context.setStrokeColor(tint.cgColor)
         context.setLineWidth(width)
         context.strokeEllipse(in: headRect)
 
@@ -384,8 +407,47 @@ final class StickmanView: NSView {
         context.fillEllipse(in: CGRect(x: head.x + 12, y: head.y - 11, width: 4, height: 4))
     }
 
+    /// A soft pulsing disc under a levitating figure.
+    private func drawLevitationGlow(context: CGContext) {
+        guard displayedState == .levitating else { return }
+        let pulse = CGFloat((sin(time * 3) + 1) * 0.5)
+        let width = 70 + pulse * 10
+        let rect = CGRect(x: 80 - width / 2, y: 140 - pulse * 2, width: width, height: 10)
+        context.setFillColor(tint.withAlphaComponent(0.12 + pulse * 0.1).cgColor)
+        context.fillEllipse(in: rect)
+        context.setStrokeColor(tint.withAlphaComponent(0.35 + pulse * 0.2).cgColor)
+        context.setLineWidth(1.6)
+        context.strokeEllipse(in: rect.insetBy(dx: 8, dy: 1.5))
+    }
+
+    /// An expanding ring and sparks, for a clone splitting off or vanishing.
+    private func drawBurst(context: CGContext) {
+        let progress = CGFloat((time - burstStartedAt) / 0.5)
+        guard progress >= 0, progress < 1 else { return }
+        let center = CGPoint(x: 80 + (skeleton.hip.x - 80) * (facingScale >= 0 ? 1 : -1), y: skeleton.hip.y - 10)
+        let radius = 12 + SMath.easeOutCubic(progress) * 60
+        let alpha = 1 - progress
+        context.saveGState()
+        context.setLineCap(.round)
+        context.setStrokeColor(NSColor.white.withAlphaComponent(0.8 * alpha).cgColor)
+        context.setLineWidth(6)
+        context.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+        context.setStrokeColor(tint.withAlphaComponent(0.9 * alpha).cgColor)
+        context.setLineWidth(2.5)
+        context.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+        for index in 0 ..< 8 {
+            let angle = CGFloat(index) * .pi / 4 + 0.3
+            let inner = radius * 0.55
+            let outer = radius * 0.55 + 10 * alpha
+            context.move(to: CGPoint(x: center.x + cos(angle) * inner, y: center.y + sin(angle) * inner))
+            context.addLine(to: CGPoint(x: center.x + cos(angle) * outer, y: center.y + sin(angle) * outer))
+        }
+        context.strokePath()
+        context.restoreGState()
+    }
+
     private func drawSleepMarks(context: CGContext, flip: CGFloat) {
-        guard displayedState == .sleeping || previewState == .sleeping else { return }
+        guard displayedState == .sleeping || displayedState == .slumped || previewState == .sleeping || previewState == .slumped else { return }
         // Drawn outside the facing flip so the letters never mirror.
         let headX = 80 + (skeleton.head.x - 80) * flip
         let side: CGFloat = flip >= 0 ? 1 : -1
@@ -544,7 +606,10 @@ final class StickmanView: NSView {
     func updateMotion(_ motion: StickmanMotion, heightAboveGround: CGFloat) {
         self.motion = motion
         self.heightAboveGround = max(0, heightAboveGround)
-        if case .grounded = motion {} else { fidget = nil }
+        switch motion {
+        case .grounded, .levitating: break
+        default: fidget = nil
+        }
         if case .held = motion { rest = .awake }
     }
 
@@ -569,9 +634,22 @@ final class StickmanView: NSView {
         self.activity = activity
     }
 
-    func setRest(_ rest: StickmanRest) {
+    /// Against a wall, sleep is a slouch with his back to the screen edge behind him.
+    func setRest(_ rest: StickmanRest, againstWall: Bool = false) {
         self.rest = rest
+        sleepsAgainstWall = rest == .sleeping && againstWall
     }
+
+    /// A short buzz, like he's about to split in two.
+    func vibrate(for duration: TimeInterval) {
+        vibrateUntil = time + duration
+    }
+
+    func showBurst() {
+        burstStartedAt = time
+    }
+
+    var isDancing: Bool { taskAnimation == .dance }
 
     var currentRest: StickmanRest { rest }
 
@@ -686,6 +764,20 @@ final class StickmanView: NSView {
         case .hanging:
             motion = .hanging
             heightAboveGround = 400
+        case .wallCling:
+            motion = .wallCling
+            heightAboveGround = 300
+        case .levitating:
+            motion = .levitating
+            heightAboveGround = 300
+        case .slumped:
+            rest = .sleeping
+            sleepsAgainstWall = true
+        case .dancing:
+            taskAnimation = .dance
+            taskAnimationStartedAt = 0
+            taskAnimationEndsAt = .infinity
+            self.time = time.truncatingRemainder(dividingBy: Self.taskDuration(.dance))
         case .held:
             motion = .held(velocity: CGVector(dx: CGFloat(sin(time * 3)) * 600, dy: 0))
             swingAngle = CGFloat(sin(time * 3 - 0.8)) * -0.35
@@ -770,6 +862,8 @@ final class StickmanView: NSView {
         switch motion {
         case .held: return .held
         case .hanging: return .hanging
+        case .wallCling: return .wallCling
+        case .levitating: return fidget.map { .fidget($0) } ?? .levitating
         case .airborne: return .airborne
         case .crouching: return .crouching
         case .grounded: break
@@ -792,7 +886,7 @@ final class StickmanView: NSView {
         if let fidget { return .fidget(fidget) }
         switch rest {
         case .sitting: return .sitting
-        case .sleeping: return .sleeping
+        case .sleeping: return sleepsAgainstWall ? .slumped : .sleeping
         case .awake: return .idle
         }
     }
@@ -801,9 +895,11 @@ final class StickmanView: NSView {
         switch (from, to) {
         case (_, .landing), (.crouching, .airborne): return 0.05
         case (.combat, .combat): return 0.07
+        case (_, .wallCling): return 0.06
         case (_, .held), (_, .crouching), (_, .hanging): return 0.12
+        case (_, .levitating): return 0.3
         case (.airborne, _), (.held, _): return 0.1
-        case (_, .sleeping), (.sleeping, _): return 0.8
+        case (_, .sleeping), (.sleeping, _), (_, .slumped), (.slumped, _): return 0.8
         case (_, .sitting), (.sitting, _): return 0.45
         case (_, .locomotion), (.locomotion, _): return 0.18
         default: return 0.24
@@ -817,6 +913,7 @@ final class StickmanView: NSView {
         case .checkCalendar: return .calendarPeek
         case .requestPermission: return .permissionKey
         case .connectService: return .connectorLink
+        case .dance: return .dancing
         }
     }
 
@@ -827,6 +924,7 @@ final class StickmanView: NSView {
         case .calendarPeek: return .checkCalendar
         case .permissionKey: return .requestPermission
         case .connectorLink: return .connectService
+        case .dancing: return .dance
         default: return nil
         }
     }
@@ -838,6 +936,7 @@ final class StickmanView: NSView {
         case .checkCalendar: return 1.35
         case .requestPermission: return 1.45
         case .connectService: return 1.5
+        case .dance: return Self.danceMoveDuration * Double(Self.danceMoves.count)
         }
     }
 
@@ -867,13 +966,9 @@ final class StickmanView: NSView {
         gaitPhase -= floor(gaitPhase)
     }
 
+    /// He has no real front or back, so a direction change is an instant mirror, never a turn.
     private func advanceFacing(dt: CGFloat) {
-        var target = facingDirection
-        if let fidget, fidget == .lookAround {
-            let progress = (time - fidgetStartedAt) / fidget.duration
-            if progress > 0.38, progress < 0.78 { target = -facingDirection }
-        }
-        facingScale = SMath.approach(facingScale, target, dt * 11)
+        facingScale = facingDirection
     }
 
     private func advanceSwing(dt: CGFloat) {
@@ -913,6 +1008,10 @@ final class StickmanView: NSView {
         case .landing: return landingPose()
         case .held: return heldPose()
         case .hanging: return hangingPose()
+        case .wallCling: return wallClingPose()
+        case .levitating: return levitatingPose()
+        case .dancing: return dancePose()
+        case .slumped: return slumpedPose()
         case .fidget(let fidget): return fidgetPose(fidget)
         }
     }
@@ -1147,6 +1246,205 @@ final class StickmanView: NSView {
             rightKnee: CGPoint(x: 110, y: 136), rightFoot: CGPoint(x: 74, y: 143),
             headTilt: 0.9, bodyLean: 0.12
         )
+    }
+
+    /// Asleep against the screen edge: back to the wall behind him (low x), hips slid out,
+    /// one leg stretched long, the other bent with an arm draped over the knee, chin on chest.
+    /// Authored so the wall sits at about x = 48, which is where the corner walk leaves it.
+    private func slumpedPose() -> StickPose {
+        let breath = CGFloat(sin(time * 1.1))
+        return StickPose(
+            head: CGPoint(x: 70, y: 84 + breath * 1.2), neck: CGPoint(x: 55, y: 100 + breath * 0.6), hip: CGPoint(x: 70, y: 140),
+            leftElbow: CGPoint(x: 50, y: 124), leftHand: CGPoint(x: 60, y: 144),
+            rightElbow: CGPoint(x: 76, y: 124 + breath * 0.5), rightHand: CGPoint(x: 97, y: 122 + breath * 0.5),
+            leftKnee: CGPoint(x: 98, y: 137), leftFoot: CGPoint(x: 127, y: 145),
+            rightKnee: CGPoint(x: 94, y: 112), rightFoot: CGPoint(x: 107, y: 145),
+            headTilt: 0.35
+        )
+    }
+
+    /// Feet planted on a wall to his front (high x), knees loaded for the kick-off,
+    /// one hand on the wall and the other thrown back for balance.
+    private func wallClingPose() -> StickPose {
+        StickPose(
+            head: CGPoint(x: 80, y: 42), neck: CGPoint(x: 85, y: 63), hip: CGPoint(x: 96, y: 104),
+            leftElbow: CGPoint(x: 66, y: 56), leftHand: CGPoint(x: 52, y: 40),
+            rightElbow: CGPoint(x: 104, y: 70), rightHand: CGPoint(x: 117, y: 60),
+            leftKnee: CGPoint(x: 112, y: 104), leftFoot: CGPoint(x: 119, y: 130),
+            rightKnee: CGPoint(x: 104, y: 82), rightFoot: CGPoint(x: 119, y: 100),
+            headTilt: -0.15
+        )
+    }
+
+    /// Cross-legged and floating, arms open with palms up, bobbing gently.
+    private func levitatingPose() -> StickPose {
+        let bob = CGFloat(sin(time * 2.1)) * 3
+        let drift = CGFloat(sin(time * 1.3)) * 2
+        return StickPose(
+            head: CGPoint(x: 80, y: 30 + bob), neck: CGPoint(x: 80, y: 52 + bob), hip: CGPoint(x: 80, y: 96 + bob),
+            leftElbow: CGPoint(x: 60, y: 84 + bob), leftHand: CGPoint(x: 44 - drift, y: 92 + bob),
+            rightElbow: CGPoint(x: 100, y: 84 + bob), rightHand: CGPoint(x: 116 + drift, y: 92 + bob),
+            leftKnee: CGPoint(x: 50, y: 106 + bob), leftFoot: CGPoint(x: 86, y: 113 + bob),
+            rightKnee: CGPoint(x: 110, y: 106 + bob), rightFoot: CGPoint(x: 74, y: 113 + bob)
+        )
+    }
+
+    // MARK: Dance
+
+    private enum DanceMove: CaseIterable {
+        case disco
+        case floss
+        case runningMan
+        case robot
+        case moonwalk
+        case ymca
+    }
+
+    private static let danceMoves = DanceMove.allCases
+    private static let danceMoveDuration: TimeInterval = 2.4
+    /// Beats per second. Every move counts off this so it reads as one song.
+    private static let danceTempo: Double = 2.2
+
+    private func dancePose() -> StickPose {
+        let elapsed = max(0, time - taskAnimationStartedAt)
+        let index = min(Self.danceMoves.count - 1, Int(elapsed / Self.danceMoveDuration))
+        let local = elapsed - Double(index) * Self.danceMoveDuration
+        let pose = dancePose(Self.danceMoves[index], at: local)
+        // Ease into the next move over the last fifth of a second.
+        let handoff = SMath.smoothstep(CGFloat(Self.danceMoveDuration - 0.2), CGFloat(Self.danceMoveDuration), CGFloat(local))
+        guard handoff > 0, index + 1 < Self.danceMoves.count else { return pose }
+        return pose.blended(toward: dancePose(Self.danceMoves[index + 1], at: 0), amount: handoff)
+    }
+
+    private func dancePose(_ move: DanceMove, at t: TimeInterval) -> StickPose {
+        let beat = t * Self.danceTempo
+        let swing = CGFloat(sin(beat * .pi))
+        let bounce = CGFloat(abs(sin(beat * .pi))) * 3
+        switch move {
+        case .disco:
+            // Point up and out, then down and across, hips rocking the other way.
+            let up = sin(beat * .pi) > 0
+            return StickPose(
+                head: CGPoint(x: 82 + swing * 2, y: 26 + bounce), neck: CGPoint(x: 80 + swing * 2, y: 48 + bounce), hip: CGPoint(x: 80 - swing * 4, y: 92 + bounce),
+                leftElbow: CGPoint(x: 60, y: 74 + bounce), leftHand: CGPoint(x: 72, y: 92 + bounce),
+                rightElbow: up ? CGPoint(x: 104, y: 34) : CGPoint(x: 92, y: 74),
+                rightHand: up ? CGPoint(x: 120, y: 8) : CGPoint(x: 62, y: 104),
+                leftKnee: CGPoint(x: 66, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+                rightKnee: CGPoint(x: 100, y: 116), rightFoot: CGPoint(x: 104, y: 145),
+                headTilt: up ? -0.15 : 0.12, bodyLean: up ? -0.06 : 0.08
+            )
+        case .floss:
+            // Both arms swing straight across the hips while the hips swing the other way.
+            let s = CGFloat(sin(beat * .pi * 2))
+            return StickPose(
+                head: CGPoint(x: 80 - s * 2, y: 26 + bounce * 0.5), neck: CGPoint(x: 80 - s * 2, y: 48 + bounce * 0.5), hip: CGPoint(x: 80 - s * 7, y: 92 + bounce * 0.5),
+                leftElbow: CGPoint(x: 70 + s * 18, y: 74), leftHand: CGPoint(x: 60 + s * 44, y: 104),
+                rightElbow: CGPoint(x: 90 + s * 18, y: 70), rightHand: CGPoint(x: 100 + s * 44, y: 94),
+                leftKnee: CGPoint(x: 66, y: 119), leftFoot: CGPoint(x: 60, y: 145),
+                rightKnee: CGPoint(x: 94, y: 119), rightFoot: CGPoint(x: 100, y: 145),
+                headTilt: s * 0.08
+            )
+        case .runningMan:
+            // Lift one knee high while the planted foot slides back, then swap.
+            let p = beat.truncatingRemainder(dividingBy: 2) / 2
+            let side: CGFloat = p < 0.5 ? 1 : -1
+            let q = CGFloat((p < 0.5 ? p : p - 0.5) * 2)
+            let lift = sin(q * .pi)
+            let slide = 18 - q * 30
+            let lifted = CGPoint(x: 88 + lift * 6, y: 145 - lift * 34)
+            let planted = CGPoint(x: 80 + slide, y: 145)
+            let pump = side * CGFloat(sin(q * .pi))
+            return StickPose(
+                head: CGPoint(x: 82, y: 26 + lift * 3), neck: CGPoint(x: 81, y: 48 + lift * 3), hip: CGPoint(x: 80, y: 93 + lift * 3),
+                leftElbow: CGPoint(x: 66 + pump * 8, y: 70), leftHand: CGPoint(x: 70 + pump * 18, y: 80 - pump * 8),
+                rightElbow: CGPoint(x: 94 - pump * 8, y: 70), rightHand: CGPoint(x: 90 - pump * 18, y: 80 + pump * 8),
+                leftKnee: CGPoint(x: 96, y: 112), leftFoot: side > 0 ? lifted : planted,
+                rightKnee: CGPoint(x: 96, y: 112), rightFoot: side > 0 ? planted : lifted,
+                bodyLean: 0.06
+            )
+        case .robot:
+            // Stiff, held keyframes that snap on the beat.
+            let frame = Int(beat * 2) % 4
+            let arms: [(CGPoint, CGPoint, CGPoint, CGPoint)] = [
+                (CGPoint(x: 62, y: 70), CGPoint(x: 62, y: 46), CGPoint(x: 98, y: 70), CGPoint(x: 120, y: 70)),
+                (CGPoint(x: 58, y: 48), CGPoint(x: 40, y: 48), CGPoint(x: 98, y: 70), CGPoint(x: 98, y: 94)),
+                (CGPoint(x: 62, y: 70), CGPoint(x: 40, y: 70), CGPoint(x: 102, y: 48), CGPoint(x: 102, y: 26)),
+                (CGPoint(x: 62, y: 70), CGPoint(x: 84, y: 70), CGPoint(x: 98, y: 70), CGPoint(x: 76, y: 70))
+            ]
+            let (le, lh, re, rh) = arms[frame]
+            let tick: CGFloat = [0, 4, 0, -4][frame]
+            return StickPose(
+                head: CGPoint(x: 80 + tick, y: 26), neck: CGPoint(x: 80, y: 48), hip: CGPoint(x: 80, y: 92 + CGFloat(frame % 2) * 3),
+                leftElbow: le, leftHand: lh, rightElbow: re, rightHand: rh,
+                leftKnee: CGPoint(x: 70, y: 119), leftFoot: CGPoint(x: 64, y: 145),
+                rightKnee: CGPoint(x: 90, y: 119), rightFoot: CGPoint(x: 96, y: 145),
+                headTilt: tick * 0.03
+            )
+        case .moonwalk:
+            // Glide backward: one foot flat and sliding, the other up on its toe, trading each beat.
+            let progress = CGFloat(t / Self.danceMoveDuration)
+            let glide = 22 - progress * 44
+            let p = beat.truncatingRemainder(dividingBy: 1)
+            let swap = Int(beat) % 2 == 0
+            let flat = CGPoint(x: 92 - CGFloat(p) * 24, y: 145)
+            let toe = CGPoint(x: 76, y: 139)
+            var pose = StickPose(
+                head: CGPoint(x: 83, y: 27), neck: CGPoint(x: 81, y: 49), hip: CGPoint(x: 80, y: 93),
+                leftElbow: CGPoint(x: 66, y: 70), leftHand: CGPoint(x: 64, y: 94),
+                rightElbow: CGPoint(x: 96, y: 66), rightHand: CGPoint(x: 92, y: 88),
+                leftKnee: CGPoint(x: 92, y: 116), leftFoot: swap ? flat : toe,
+                rightKnee: CGPoint(x: 92, y: 116), rightFoot: swap ? toe : flat,
+                headTilt: -0.04, bodyLean: 0.04
+            )
+            pose = pose.offsetBy(dx: glide, dy: 0)
+            return pose
+        case .ymca:
+            // Y, M, C, A, one letter per beat.
+            let letter = Int(beat) % 4
+            var pose = StickPose(
+                head: CGPoint(x: 80, y: 26 + bounce), neck: CGPoint(x: 80, y: 48 + bounce), hip: CGPoint(x: 80, y: 92 + bounce),
+                leftElbow: CGPoint(x: 58, y: 32), leftHand: CGPoint(x: 40, y: 12),
+                rightElbow: CGPoint(x: 102, y: 32), rightHand: CGPoint(x: 120, y: 12),
+                leftKnee: CGPoint(x: 66, y: 119), leftFoot: CGPoint(x: 58, y: 145),
+                rightKnee: CGPoint(x: 94, y: 119), rightFoot: CGPoint(x: 102, y: 145)
+            )
+            switch letter {
+            case 1:
+                pose.leftElbow = CGPoint(x: 54, y: 34); pose.leftHand = CGPoint(x: 70, y: 16)
+                pose.rightElbow = CGPoint(x: 106, y: 34); pose.rightHand = CGPoint(x: 90, y: 16)
+            case 2:
+                pose.leftElbow = CGPoint(x: 60, y: 30); pose.leftHand = CGPoint(x: 78, y: 10)
+                pose.rightElbow = CGPoint(x: 70, y: 74); pose.rightHand = CGPoint(x: 88, y: 88)
+                pose.bodyLean = -0.1
+            case 3:
+                pose.leftElbow = CGPoint(x: 70, y: 28); pose.leftHand = CGPoint(x: 79, y: 2)
+                pose.rightElbow = CGPoint(x: 90, y: 28); pose.rightHand = CGPoint(x: 81, y: 2)
+            default:
+                break
+            }
+            return pose
+        }
+    }
+
+    /// Eighth notes drifting up beside his head while he dances.
+    private func drawMusicNotes(context: CGContext) {
+        let elapsed = max(0, time - taskAnimationStartedAt)
+        let total = Self.taskDuration(.dance)
+        let fade = CGFloat(min(1, elapsed / 0.4, max(0, total - elapsed) / 0.4))
+        for index in 0 ..< 3 {
+            let phase = CGFloat((elapsed * 0.55 + Double(index) / 3).truncatingRemainder(dividingBy: 1))
+            let side: CGFloat = index % 2 == 0 ? 1 : -1
+            let base = CGPoint(x: 80 + side * (30 + phase * 14), y: 40 - phase * 34)
+            let alpha = sin(phase * .pi) * 0.85 * fade
+            context.setStrokeColor(tint.withAlphaComponent(alpha).cgColor)
+            context.setFillColor(tint.withAlphaComponent(alpha).cgColor)
+            context.setLineWidth(1.8)
+            context.fillEllipse(in: CGRect(x: base.x - 3.5, y: base.y - 2.5, width: 7, height: 5))
+            context.move(to: CGPoint(x: base.x + 3, y: base.y))
+            context.addLine(to: CGPoint(x: base.x + 3, y: base.y - 13))
+            context.addLine(to: CGPoint(x: base.x + 8, y: base.y - 9))
+            context.strokePath()
+        }
     }
 
     private func fidgetPose(_ fidget: StickmanFidget) -> StickPose {
@@ -1646,6 +1944,9 @@ final class StickmanView: NSView {
                 context.addLine(to: CGPoint(x: center.x + cos(angle) * 17, y: center.y + sin(angle) * 17))
                 context.strokePath()
             }
+
+        case .dance:
+            drawMusicNotes(context: context)
         }
         context.restoreGState()
     }

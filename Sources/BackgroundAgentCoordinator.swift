@@ -38,7 +38,9 @@ struct StickmanAgentTask: Codable, Identifiable, Equatable {
 enum StickmanAgentCommandParser {
     static func taskPrompt(from input: String) -> String? {
         let patterns = [
-            #"(?i)^(?:(?:hey\s+)?stickman[, ]*)?(?:spawn|start|run|launch)\s+(?:a|an|another)?\s*(?:background\s+)?(?:sub[- ]?)?agent(?:\s+to|\s+for)?\s+(.+)$"#,
+            #"(?i)^(?:(?:hey\s+)?stickman[, ]*)?(?:can you\s+|please\s+)?(?:spawn|start|run|launch|spin\s+up|kick\s+off|fire\s+up)\s+(?:a|an|another|some|a\s+few)?\s*(?:background\s+)?(?:sub[- ]?)?agents?(?:\s+to|\s+for|\s+that)?\s+(.+)$"#,
+            #"(?i)^(?:(?:hey\s+)?stickman[, ]*)?in\s+the\s+background[, ]+(?:can you\s+|please\s+)?(.+)$"#,
+            #"(?i)^(?:(?:hey\s+)?stickman[, ]*)?(?:can you\s+|please\s+)?(?!(?:what|how|why|is|are|do|does|which)\b)(.+?)\s+in\s+the\s+background[.!]*$"#,
             #"(?i)^(?:(?:hey\s+)?stickman[, ]*)?ask\s+(?:a|an)\s+(?:background\s+)?(?:sub[- ]?)?agent\s+to\s+(.+)$"#,
             #"(?i)^(?:(?:hey\s+)?stickman[, ]*)?(?:sub[- ]?)?agent[, :]\s*(?:can you\s+)?(.+)$"#
         ]

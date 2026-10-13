@@ -30,7 +30,7 @@ final class RealtimeVoiceClient {
     init(
         apiKey: String? = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
         model: String = ProcessInfo.processInfo.environment["STICKMAN_REALTIME_MODEL"] ?? "gpt-realtime-2.1",
-        voice: String = ProcessInfo.processInfo.environment["STICKMAN_REALTIME_VOICE"] ?? "marin",
+        voice: String = RealtimeVoiceClient.preferredVoice,
         instructions: String = OpenAIResponsesClient.loadInstructions(),
         session: URLSession = .shared
     ) {
@@ -39,6 +39,20 @@ final class RealtimeVoiceClient {
         self.voice = voice
         self.instructions = instructions
         self.session = session
+    }
+
+    /// Cedar is OpenAI's deeper male realtime voice. Override with the STICKMAN_REALTIME_VOICE
+    /// environment variable or `defaults write com.chaymore.Stickman StickmanRealtimeVoice ash`.
+    /// A custom voice id (`voice_...`) works too once the account has custom voices.
+    static var preferredVoice: String {
+        if let value = ProcessInfo.processInfo.environment["STICKMAN_REALTIME_VOICE"], !value.isEmpty { return value }
+        if let value = UserDefaults.standard.string(forKey: "StickmanRealtimeVoice"), !value.isEmpty { return value }
+        return "cedar"
+    }
+
+    /// Named voices go as a string; custom voices (ids like `voice_123abc`) go as `{"id": ...}`.
+    static func voiceParameter(_ voice: String) -> Any {
+        voice.hasPrefix("voice_") ? ["id": voice] : voice
     }
 
     func start() async throws {
@@ -106,7 +120,7 @@ final class RealtimeVoiceClient {
         \(WebsiteBlockerService.shared.statusSummary)
 
         You are in live voice mode. Keep replies conversational, warm, and brief unless the user asks for detail.
-        Use spawn_background_agent when the user asks you to delegate work or run a sub-agent. Use start_claude_code when the user asks Claude or Claude Code to do coding work in one of their projects; pass the project name they said, or an empty string if they named none. Also use start_claude_code with computer_use true when the user asks you to do something on their computer that needs an app's interface. Use list_claude_code_sessions when they ask how Claude's work is going. Use the Chrome tools for explicit browser requests. Tell the user what you started or changed after the tool returns.
+        You speak as a guy. Use start_claude_code whenever the user asks you to delegate work, spin up a sub-agent, do something in the background, or have Claude or Claude Code do coding work; pass the project name they said, or an empty string if they named none. Use dance when the user asks you to dance or show your moves. Also use start_claude_code with computer_use true when the user asks you to do something on their computer that needs an app's interface. Use list_claude_code_sessions when they ask how Claude's work is going. Use the Chrome tools for explicit browser requests. Tell the user what you started or changed after the tool returns.
         """
 
         sendJSON([
@@ -135,7 +149,7 @@ final class RealtimeVoiceClient {
                             "type": "audio/pcm",
                             "rate": Int(RealtimeAudioIOController.sampleRate)
                         ],
-                        "voice": voice
+                        "voice": Self.voiceParameter(voice)
                     ]
                 ]
             ]
@@ -284,22 +298,14 @@ final class RealtimeVoiceClient {
     private static let functionTools: [[String: Any]] = [
         [
             "type": "function",
-            "name": "spawn_background_agent",
-            "description": "Launch a durable background specialist for research or another multi-step task while the user keeps working.",
-            "parameters": [
-                "type": "object",
-                "properties": [
-                    "task": ["type": "string", "description": "The complete task for the specialist."],
-                    "open_browser_links": ["type": "boolean", "description": "True only when the user explicitly asked Stickman to open useful result links in Chrome."]
-                ],
-                "required": ["task", "open_browser_links"],
-                "additionalProperties": false
-            ]
+            "name": "dance",
+            "description": "Dance on the user's screen. Use when the user asks Stickman to dance, bust a move, or show his moves.",
+            "parameters": ["type": "object", "properties": [:], "additionalProperties": false]
         ],
         [
             "type": "function",
             "name": "start_claude_code",
-            "description": "Start a Claude Code session on the user's personal account to do coding work in one of their projects, or to operate apps on this Mac with computer use. Runs in the background on this Mac, or in the cloud when the user asks for that.",
+            "description": "Start a Claude Code session on the user's personal account. Use it for any background work or sub-agent the user asks for (research, writing, coding), for coding in one of their projects, or to operate apps on this Mac with computer use. Runs in the background on this Mac, or in the cloud when the user asks for that.",
             "parameters": [
                 "type": "object",
                 "properties": [

@@ -35,22 +35,24 @@ Sparring never synthesizes clicks, edits documents, closes apps, or changes anot
 
 ## Interaction map
 
-- `Option+B`: Stickman leaps into the notch and hides; press again and he drops back out.
+- `Option+B`: Stickman leaps into the notch and hides; press again and he drops back out. From the bottom half of the screen he sprints to the nearer side, wall-jumps, and catches the notch at the top of the arc.
 - `Option+Space`: peaceful quick assist with fresh screen context.
 - `Option+F`: call a truce while sparring.
 - `Control+-`: open Stickman's chat menu.
-- `Control+Option`: open Stickman and start voice mode.
+- `Control+Option` (tap and release, no other key): start or stop voice mode.
 - Menu bar stickman: open chat or settings, start voice, inspect background agents, hide/show Stickman, or quit.
 - Double-click: chat.
 - Single click: a small hop. Wakes him if he is resting.
 - Drag and release: pick him up and throw him.
 - Option+triple-click: the only way to challenge Stickman. "Stop Fighting" in the menu bar ends it.
-- Option+right-click a window: he climbs onto its top edge. Option+right-click empty space: he walks to the ledge below it. Plain right-clicks are left alone.
+- Option+click a window: he climbs onto its top edge. Option+click empty space: he walks to the ledge below it. Fires on release when the pointer barely moved; menu bar and Dock clicks are ignored. The click still reaches the app under it.
 - Screen sharing or recording: Stickman and his panel fade out until the capture stops. "Show Stickman Anyway" in the menu bar overrides it for that share.
 - Circle Stickman during a fight: truce.
 - Remain on one foreground window for a minute: Stickman walks or leaps to its top-right corner and sits cross-legged until the window changes or closes.
-- Idle: he strolls, hops between windows, and fidgets every half minute or so. He sits after about 2.5 quiet minutes and sleeps after 7. Wandering can be turned off in Settings.
-- Agent launch: Stickman waves and opens a small portal beside his raised hand.
+- Idle: he strolls, hops between windows, and fidgets every half minute or so. He sits after about 2.5 quiet minutes. After 7 he walks to the nearer bottom screen corner and sleeps slouched against the wall. Wandering can be turned off in Settings.
+- Agent launch: requests for sub-agents or background work start a Claude Code background session. Stickman buzzes and a colored clone (`StickmanClone.swift`) splits off, leaps to the top-right corner, and levitates until the session finishes. Cloud sessions still get the wave and portal.
+- Dance: "dance" in chat or voice plays a 14-second routine (disco, floss, running man, robot, moonwalk, YMCA).
+- Facing: direction changes are an instant mirror, never a turn, and he no longer turns to glance at the cursor.
 - Chrome action: Stickman flicks a magic wand and materializes a tab.
 - Calendar, permission, and connector work each have their own short, interruptible gesture.
 

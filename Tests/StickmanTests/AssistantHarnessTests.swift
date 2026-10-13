@@ -9,6 +9,27 @@ struct AssistantHarnessTests {
         #expect(StickmanAgentCommandParser.taskPrompt(from: "what time is it") == nil)
     }
 
+    @Test func backgroundPhrasingAlsoCountsAsAnAgentRequest() {
+        #expect(StickmanAgentCommandParser.taskPrompt(from: "spin up subagents to compare the three laptops") == "compare the three laptops")
+        #expect(StickmanAgentCommandParser.taskPrompt(from: "summarize my notes in the background") == "summarize my notes")
+        #expect(StickmanAgentCommandParser.taskPrompt(from: "in the background, draft the README") == "draft the README")
+        #expect(StickmanAgentCommandParser.taskPrompt(from: "what is running in the background") == nil)
+    }
+
+    @Test func customVoiceIdsAreSentAsObjects() {
+        #expect(RealtimeVoiceClient.voiceParameter("cedar") as? String == "cedar")
+        #expect((RealtimeVoiceClient.voiceParameter("voice_123abc") as? [String: String])?["id"] == "voice_123abc")
+    }
+
+    @Test func danceRequestsTriggerTheEasterEgg() {
+        #expect(StickmanDanceCommand.matches("dance"))
+        #expect(StickmanDanceCommand.matches("Can you dance?"))
+        #expect(StickmanDanceCommand.matches("hey stickman, do a little dance!"))
+        #expect(StickmanDanceCommand.matches("bust a move"))
+        #expect(!StickmanDanceCommand.matches("find me a dance class near campus"))
+        #expect(!StickmanDanceCommand.matches("what is a dance"))
+    }
+
     @Test func browserOpeningRequiresAnExplicitAgentRequest() {
         #expect(StickmanAgentCommandParser.shouldOpenBrowserLinks(for: "research the assignment and open the useful Chrome tabs"))
         #expect(!StickmanAgentCommandParser.shouldOpenBrowserLinks(for: "research the assignment"))

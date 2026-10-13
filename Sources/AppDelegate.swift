@@ -7,7 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var hotKeyManager: HotKeyManager?
     private var statusItem: NSStatusItem?
     private var agentStatusMenuItem: NSMenuItem?
-    private var rightClickMonitors: [Any] = []
+    private var walkClickMonitors: [Any] = []
+    private var pendingWalkClick: NSPoint?
     private var isStickmanVisible = false
     private var screenShareObserver: NSObjectProtocol?
     private var shareStatusMenuItem: NSMenuItem?
@@ -45,11 +46,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onQuickAssist: { [weak self] in DispatchQueue.main.async { self?.quickAssist() } },
             onToggleCombat: { [weak self] in DispatchQueue.main.async { self?.toggleCombat() } },
             onOpenMenu: { [weak self] in DispatchQueue.main.async { self?.openMenu() } },
-            onStartVoice: { [weak self] in DispatchQueue.main.async { self?.startVoiceMode() } }
+            onToggleVoice: { [weak self] in DispatchQueue.main.async { self?.toggleVoiceMode() } }
         )
         hotKeyManager.register()
         self.hotKeyManager = hotKeyManager
-        installRightClickTracking()
+        installWalkClickTracking()
         startScreenShareGuard()
     }
 
@@ -58,10 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        for monitor in rightClickMonitors {
+        for monitor in walkClickMonitors {
             NSEvent.removeMonitor(monitor)
         }
-        rightClickMonitors.removeAll()
+        walkClickMonitors.removeAll()
         ScreenShareMonitor.shared.stop()
         StickmanBlocker.shared.stop()
         if let screenShareObserver { NotificationCenter.default.removeObserver(screenShareObserver) }
@@ -130,20 +131,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         stickmanWindowController?.setHiddenForScreenShare(hide)
     }
 
-    private func installRightClickTracking() {
-        let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
-            guard HotKeyManager.isWalkClick(flags: event.modifierFlags) else { return }
-            self?.walkStickman(to: NSEvent.mouseLocation)
+    /// Option+click in another app sends Stickman there. It fires on release, and only when
+    /// the pointer barely moved, so Option-drags (like copying files in Finder) don't count.
+    /// Clicks in the menu bar or the Dock are left alone. Only a global monitor is used, so
+    /// Option-clicks inside Stickman's own windows never move him.
+    private func installWalkClickTracking() {
+        let down = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            let point = NSEvent.mouseLocation
+            let onDesktop = NSScreen.screens.contains { $0.visibleFrame.contains(point) }
+            let isWalk = HotKeyManager.isWalkClick(flags: event.modifierFlags) && event.clickCount == 1 && onDesktop
+            DispatchQueue.main.async { self?.pendingWalkClick = isWalk ? point : nil }
         }
-
-        let localMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
-            if HotKeyManager.isWalkClick(flags: event.modifierFlags) {
-                self?.walkStickman(to: NSEvent.mouseLocation)
+        let up = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] event in
+            let point = NSEvent.mouseLocation
+            let stillOption = HotKeyManager.isWalkClick(flags: event.modifierFlags)
+            DispatchQueue.main.async {
+                guard let self, let start = self.pendingWalkClick else { return }
+                self.pendingWalkClick = nil
+                guard stillOption, hypot(point.x - start.x, point.y - start.y) < 6 else { return }
+                self.walkStickman(to: start)
             }
-            return event
         }
-
-        rightClickMonitors = [globalMonitor, localMonitor].compactMap { $0 }
+        walkClickMonitors = [down, up].compactMap { $0 }
     }
 
     private func walkStickman(to screenPoint: NSPoint) {
@@ -166,6 +175,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func startVoiceMode() {
         summonIfNeeded()
         stickmanWindowController?.startVoiceMode()
+    }
+
+    /// Control+Option tap: start voice, or stop it if it's already on.
+    private func toggleVoiceMode() {
+        if stickmanWindowController?.isVoiceModeActive == true {
+            stickmanWindowController?.stopVoiceMode()
+        } else {
+            startVoiceMode()
+        }
     }
 
     private func toggleCombat() {

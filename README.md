@@ -60,17 +60,20 @@ export STICKMAN_OPENROUTER_MODEL=google/gemini-2.5-flash
 | Poke | Click Stickman once |
 | Pick up and throw | Drag Stickman, then let go mid-motion |
 | Start sparring | `Option`+triple-click Stickman |
-| Send him somewhere | `Option`+right-click a window to climb onto it, or empty space to walk there |
+| Send him somewhere | `Option`+click a window to climb onto it, or empty space to walk there |
 | Close the panel | `Esc` |
-| Hide in the notch, or bring him back out | `Option+B` |
+| Hide in the notch, or bring him back out | `Option+B`. From the top half of the screen he leaps straight up and grabs it; from the bottom half he wall-jumps off the nearer side of the screen |
 | Quick screen-aware assist | `Option+Space` |
 | End sparring | `Option+F`, **Stop Fighting** in the menu bar, or circle Stickman with the cursor |
 | Open chat menu | `Control+-` |
-| Start voice mode | Press `Control+Option` together |
+| Start or stop voice mode | Tap `Control+Option` together and let go |
+| Dance | Ask him to dance in chat or voice |
 
 After the same foreground window stays active for a minute, Stickman walks or leaps to its top-right corner and sits cross-legged. Switching windows makes him stand up and stretch his legs. If a window he stands on closes or gets covered, he falls to the next ledge below.
 
-Left alone, he strolls along his ledge, hops between windows, and fidgets. After a few quiet minutes he sits down, then falls asleep. Turn off wandering in **Settings → General**.
+Left alone, he strolls along his ledge, hops between windows, and fidgets. After a few quiet minutes he sits down. A few minutes later he walks to the nearer bottom corner of the screen and falls asleep slouched against the wall. Turn off wandering in **Settings → General**.
+
+Ask Stickman for a sub-agent or for anything "in the background" and he starts a Claude Code background session. He buzzes, a colored clone splits off, runs and leaps to the top-right corner, and floats there while the session works. It waves if the session needs you and vanishes when it's done.
 
 When Zoom, Meet, Teams, or a screen recorder starts capturing your screen, Stickman and his panel fade out. They come back a couple of seconds after the capture stops. Choose **Show Stickman Anyway** from the menu bar to keep him visible for the rest of that share, or turn the behavior off in **Settings → General**. macOS has no public API for this, so Stickman reads the window server's capture flag (the one behind the purple recording icon) through a private CoreGraphics call. It reads only whether a capture is running, never what is captured. If a future macOS removes the call, the setting turns itself off.
 
@@ -155,7 +158,7 @@ Runtime model overrides:
 export STICKMAN_OPENAI_MODEL=gpt-5.6-terra
 export STICKMAN_AGENT_MODEL=gpt-5.6-sol
 export STICKMAN_REALTIME_MODEL=gpt-realtime-2.1
-export STICKMAN_REALTIME_VOICE=marin
+export STICKMAN_REALTIME_VOICE=cedar
 ```
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md), [Architecture](docs/ARCHITECTURE.md), and [Distribution](docs/DISTRIBUTION.md) before making structural or release changes.

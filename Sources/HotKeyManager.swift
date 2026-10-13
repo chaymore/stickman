@@ -12,26 +12,26 @@ final class HotKeyManager {
     private var hotKeyRefs: [EventHotKeyRef] = []
     private var modifierMonitors: [Any] = []
     private var eventHandlerRef: EventHandlerRef?
-    private var voiceChordLatched = false
+    private var voiceChord = VoiceChordTracker()
     private let signature = OSType(0x4D494C4F)
     private let onToggle: () -> Void
     private let onQuickAssist: () -> Void
     private let onToggleCombat: () -> Void
     private let onOpenMenu: () -> Void
-    private let onStartVoice: () -> Void
+    private let onToggleVoice: () -> Void
 
     init(
         onToggle: @escaping () -> Void,
         onQuickAssist: @escaping () -> Void,
         onToggleCombat: @escaping () -> Void,
         onOpenMenu: @escaping () -> Void,
-        onStartVoice: @escaping () -> Void
+        onToggleVoice: @escaping () -> Void
     ) {
         self.onToggle = onToggle
         self.onQuickAssist = onQuickAssist
         self.onToggleCombat = onToggleCombat
         self.onOpenMenu = onOpenMenu
-        self.onStartVoice = onStartVoice
+        self.onToggleVoice = onToggleVoice
     }
 
     func register() {
@@ -88,31 +88,25 @@ final class HotKeyManager {
         }
     }
 
+    /// Control+Option toggles voice when tapped on its own: press both, let go, no other key.
+    /// Firing on release keeps shortcuts like Control+Option+Arrow from starting voice.
     private func installVoiceChordMonitors() {
-        if let globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
-            self?.handleModifierFlags(event.modifierFlags)
-        }) {
-            modifierMonitors.append(globalMonitor)
+        let flagsHandler: (NSEvent) -> Void = { [weak self] event in
+            guard let self else { return }
+            if self.voiceChord.flagsChanged(event.modifierFlags, at: event.timestamp) { self.onToggleVoice() }
         }
-        if let localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { [weak self] event in
-            self?.handleModifierFlags(event.modifierFlags)
-            return event
-        }) {
-            modifierMonitors.append(localMonitor)
-        }
+        let spoilHandler: (NSEvent) -> Void = { [weak self] _ in self?.voiceChord.spoil() }
+        let spoilers: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+        let monitors: [Any?] = [
+            NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flagsHandler),
+            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { flagsHandler($0); return $0 },
+            NSEvent.addGlobalMonitorForEvents(matching: spoilers, handler: spoilHandler),
+            NSEvent.addLocalMonitorForEvents(matching: spoilers) { spoilHandler($0); return $0 }
+        ]
+        modifierMonitors = monitors.compactMap { $0 }
     }
 
-    private func handleModifierFlags(_ flags: NSEvent.ModifierFlags) {
-        let isVoiceChord = Self.isVoiceShortcut(flags: flags)
-        if isVoiceChord, !voiceChordLatched {
-            voiceChordLatched = true
-            onStartVoice()
-        } else if !isVoiceChord {
-            voiceChordLatched = false
-        }
-    }
-
-    /// Option+right-click sends Stickman somewhere. A plain right-click stays with the app under it.
+    /// Option+click sends Stickman somewhere. The click still reaches the app under it.
     static func isWalkClick(flags: NSEvent.ModifierFlags) -> Bool {
         let flags = flags.intersection(.deviceIndependentFlagsMask)
         return flags.contains(.option)
@@ -132,5 +126,34 @@ final class HotKeyManager {
         hotKeyRefs.forEach { _ = UnregisterEventHotKey($0) }
         modifierMonitors.forEach { NSEvent.removeMonitor($0) }
         if let eventHandlerRef { RemoveEventHandler(eventHandlerRef) }
+    }
+}
+
+/// Recognizes a Control+Option tap: both held together, then all modifiers released,
+/// with no key, click, or scroll in between, inside a short window.
+struct VoiceChordTracker {
+    static let maximumHold: TimeInterval = 1.2
+    private var chordStartedAt: TimeInterval?
+    private var isSpoiled = false
+
+    /// Returns true when this change completes a clean tap.
+    mutating func flagsChanged(_ flags: NSEvent.ModifierFlags, at time: TimeInterval) -> Bool {
+        let flags = flags.intersection(.deviceIndependentFlagsMask)
+        if HotKeyManager.isVoiceShortcut(flags: flags) {
+            if chordStartedAt == nil {
+                chordStartedAt = time
+                isSpoiled = false
+            }
+            return false
+        }
+        if flags.contains(.command) || flags.contains(.shift) { isSpoiled = true }
+        guard flags.intersection([.control, .option, .command, .shift]).isEmpty else { return false }
+        defer { chordStartedAt = nil; isSpoiled = false }
+        guard let started = chordStartedAt, !isSpoiled else { return false }
+        return time - started <= Self.maximumHold
+    }
+
+    mutating func spoil() {
+        if chordStartedAt != nil { isSpoiled = true }
     }
 }
